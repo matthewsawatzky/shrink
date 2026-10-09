@@ -1,0 +1,15 @@
+# build output
+dist/
+shrink
+
+# OS noise
+.DS_Store
+
+# test media - local fixtures only, never pushed
+testmedia/
+*.mp4
+*.MOV
+
+# scratch
+info.txt
+info-gen.sh

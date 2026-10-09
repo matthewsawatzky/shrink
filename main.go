@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// version is the shrink version, stamped in at release time via
+// -ldflags "-X main.version=v1.2.3"; local builds report "dev".
+var version = "dev"
+
 // levelSpec holds the encoder settings one compression level maps to.
 type levelSpec struct {
 	videoCRF     string
@@ -112,6 +116,7 @@ func usage() {
 		{"-r, --recursive", "with a folder, also scan subfolders"},
 		{"-j, --jobs N", "folder mode: encode N files at once (default 2)"},
 		{"-m, --machine", "emit JSON instead of human output (for scripts/LLMs)"},
+		{"-V, --version", "print the version and exit"},
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", f.name)), f.desc)
 	}
@@ -364,6 +369,9 @@ func main() {
 			machine = true
 		case "-r", "--recursive":
 			recursive = true
+		case "-V", "--version":
+			fmt.Println("shrink " + version)
+			os.Exit(0)
 		case "-j", "--jobs":
 			i++
 			if i >= len(args) {

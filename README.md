@@ -22,6 +22,12 @@ Shrink supports:
 - ffmpeg and ffprobe on your PATH
 - A full FFmpeg build for every output format - stripped-down builds are missing encoders like webp and vorbis (`brew install ffmpeg` gets everything)
 
+## Install:
+```bash
+curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.sh | sh
+```
+Or grab a binary from the [releases page](https://github.com/matthewsawatzky/shrink/releases) and put it on your PATH.
+
 ## CLI:
 
 Usage:
@@ -56,6 +62,7 @@ In folder mode, give one format per media kind (e.g. `shrink folder ~/Media jpeg
 | `-v`, `--verbose` | step timings, and ms and KB everywhere |
 | `-r`, `--recursive` | with a folder, also scan subfolders |
 | `-j`, `--jobs N` | folder mode: encode N files at once (default 2) |
+| `-V`, `--version` | print the version and exit |
 
 ### Exit codes:
 | Code | Meaning |
@@ -65,3 +72,9 @@ In folder mode, give one format per media kind (e.g. `shrink folder ~/Media jpeg
 | 130 | cancelled with Ctrl+C (partial files are cleaned up) |
 
 *better than it could have been... idk what to say
+
+## Releasing (maintainer):
+```bash
+./release.sh v0.1.0 "release notes here"
+```
+That tags, pushes, cross-builds (macOS/Linux, arm64/amd64) and publishes the release with checksums - `install.sh` then picks it up automatically.
