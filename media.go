@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,10 +53,31 @@ func outputFileName(input, outKind, fmtName, operation, resolution, level string
 	name := base + "-" + strings.Join(parts, "-")
 	out := filepath.Join(dir, name+"."+ext)
 	// avoid overwriting existing files: bump a counter
-	for i := 1; fileExists(out); i++ {
+	for i := 1; !reserveOut(out); i++ {
 		out = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", name, i, ext))
 	}
 	return out
+}
+
+// reservedOut tracks output paths handed out this run. Parallel workers
+// can pick names before ffmpeg has created the file (two inputs like
+// clip.mp4 + clip.mkv both map to clip-compressed.mp4), so a plain
+// fileExists check would race; reserving is check-and-set.
+var (
+	reservedMu  sync.Mutex
+	reservedOut = map[string]bool{}
+)
+
+// reserveOut claims path for this run if no existing file or prior
+// claim holds it.
+func reserveOut(path string) bool {
+	reservedMu.Lock()
+	defer reservedMu.Unlock()
+	if reservedOut[path] || fileExists(path) {
+		return false
+	}
+	reservedOut[path] = true
+	return true
 }
 
 func fileExists(path string) bool {
@@ -68,10 +90,10 @@ func fileExists(path string) bool {
 // seconds (0 when absent, e.g. images), and whether it has an audio
 // track. One ffprobe call collects it all.
 type mediaInfo struct {
-	ok         bool
-	hasAudio   bool
-	hasVideo   bool
-	duration   float64
+	ok       bool
+	hasAudio bool
+	hasVideo bool
+	duration float64
 }
 
 // probeFile gathers input metadata via a single ffprobe invocation
@@ -209,7 +231,7 @@ func firstMeaningfulLine(stderr string) string {
 // going. duration is the input's length in seconds from the earlier
 // probe, passed down for the progress bar - 0 means unknown.
 
-func handleVideo(input string, resolution string, videoFmt string, compress string, duration float64) (string, error) {
+func handleVideo(input string, resolution string, videoFmt string, compress string, duration float64) (*fileReport, error) {
 	if videoFmt == "" {
 		videoFmt = "mp4"
 	}
@@ -242,10 +264,9 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	}
 	took, err := runFFmpegWithDuration(label, duration, args...)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %v", err)
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	finishJob(input, out, took, "compress")
-	return out, nil
+	return finishJob(input, out, took, "compress"), nil
 }
 
 // imageCodecArgs builds the encoder flags for one still-image output,
@@ -263,7 +284,7 @@ func imageCodecArgs(codec, quality, webpQ string) []string {
 	}
 }
 
-func handleImage(input string, resolution string, imageFmt string, compress string) (string, error) {
+func handleImage(input string, resolution string, imageFmt string, compress string) (*fileReport, error) {
 	if imageFmt == "" {
 		imageFmt = "jpeg"
 	}
@@ -289,13 +310,12 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	}
 	took, err := runFFmpeg(label, args...)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %v", err)
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	finishJob(input, out, took, "compress")
-	return out, nil
+	return finishJob(input, out, took, "compress"), nil
 }
 
-func handleAudio(input string, audioFmt string, compress string, duration float64) (string, error) {
+func handleAudio(input string, audioFmt string, compress string, duration float64) (*fileReport, error) {
 	if audioFmt == "" {
 		audioFmt = "mp3"
 	}
@@ -320,65 +340,93 @@ func handleAudio(input string, audioFmt string, compress string, duration float6
 
 	took, err := runFFmpegWithDuration("compressing", duration, args...)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %v", err)
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	finishJob(input, out, took, "compress")
-	return out, nil
+	return finishJob(input, out, took, "compress"), nil
 }
 
-// finishJob reports a completed job. Human mode prints the summary line and
-// verbose steps; machine mode records a JSON result for the final document.
-func finishJob(input, out string, took time.Duration, operation string) {
-	statDone := trackStep("stat output")
+// fileReport is one finished job's outcome. Parallel batches hold
+// reports back and print them in input order once the run completes.
+type fileReport struct {
+	input     string
+	out       string
+	kind      string
+	operation string
+	took      time.Duration
+	inBytes   int64
+	outBytes  int64
+	statOK    bool // output file could be stat'ed
+	warning   string
+}
+
+// print reports a finished job in human mode: the done line, any size
+// warning, and this file's verbose step list.
+func (r *fileReport) print() {
+	if !r.statOK {
+		fmt.Fprintf(os.Stderr, "%s %s %s\n", doneMark(), ui.bold(r.out), ui.dim("took "+humanDuration(r.took.Seconds())))
+		printStepsFor(r.input)
+		return
+	}
+	if r.inBytes > 0 {
+		fmt.Fprintf(os.Stderr, "%s %s %s  %s  %s\n",
+			doneMark(), ui.bold(r.out),
+			ui.dim(fmt.Sprintf("(%s → %s)", humanSize(r.inBytes), humanSize(r.outBytes))),
+			savingsText(r.inBytes, r.outBytes),
+			ui.dim("took "+humanDuration(r.took.Seconds())))
+	} else {
+		fmt.Fprintf(os.Stderr, "%s %s %s\n", doneMark(), ui.bold(r.out), ui.dim("took "+humanDuration(r.took.Seconds())))
+	}
+	if r.warning != "" {
+		fmt.Fprintf(os.Stderr, "%s %s %s\n", ui.yellow("!"), ui.yellow("warning:"), r.warning)
+	}
+	printStepsFor(r.input)
+}
+
+// finishJob records a completed job. Human mode prints the summary line
+// and verbose steps unless a parallel batch is collecting reports;
+// machine mode appends a JSON result for the final document.
+func finishJob(input, out string, took time.Duration, operation string) *fileReport {
+	statDone := trackStep(input, "stat output")
 	inSize, _ := os.Stat(input)
 	outSize, err := os.Stat(out)
 	statDone()
 
-	inBytes, outBytes := int64(0), int64(0)
+	r := &fileReport{
+		input: input, out: out, kind: detectKind(input), operation: operation,
+		took: took, statOK: err == nil,
+	}
 	if inSize != nil {
-		inBytes = inSize.Size()
+		r.inBytes = inSize.Size()
 	}
 	if err == nil && outSize != nil {
-		outBytes = outSize.Size()
+		r.outBytes = outSize.Size()
 	}
-	warning := sizeWarning(input, out)
+	r.warning = sizeWarning(input, out)
 
 	if machine {
 		f := machineFile{
-			Input: input, Output: out, Kind: detectKind(input), Operation: operation,
-			InputBytes: inBytes, OutputBytes: outBytes,
-			TookMS: took.Milliseconds(), Warning: warning, Steps: machineSteps(),
+			Input: r.input, Output: r.out, Kind: r.kind, Operation: r.operation,
+			InputBytes: r.inBytes, OutputBytes: r.outBytes,
+			TookMS: r.took.Milliseconds(), Warning: r.warning, Steps: machineStepsFor(r.input),
 		}
-		if inBytes > 0 {
-			f.SavingsPercent = round2((1 - float64(outBytes)/float64(inBytes)) * 100)
+		if r.inBytes > 0 {
+			f.SavingsPercent = round2((1 - float64(r.outBytes)/float64(r.inBytes)) * 100)
 		}
+		machineFilesMu.Lock()
 		machineFiles = append(machineFiles, f)
-		return
+		machineFilesMu.Unlock()
+		return r
 	}
 
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s %s %s\n", doneMark(), ui.bold(out), ui.dim("took "+humanDuration(took.Seconds())))
-		printSteps()
-		return
+	if !parallel {
+		r.print()
 	}
-	if inBytes > 0 {
-		fmt.Fprintf(os.Stderr, "%s %s %s  %s  %s\n",
-			doneMark(), ui.bold(out),
-			ui.dim(fmt.Sprintf("(%s → %s)", humanSize(inBytes), humanSize(outBytes))),
-			savingsText(inBytes, outBytes),
-			ui.dim("took "+humanDuration(took.Seconds())))
-	} else {
-		fmt.Fprintf(os.Stderr, "%s %s %s\n", doneMark(), ui.bold(out), ui.dim("took "+humanDuration(took.Seconds())))
-	}
-	if warning != "" {
-		fmt.Fprintf(os.Stderr, "%s %s %s\n", ui.yellow("!"), ui.yellow("warning:"), warning)
-	}
-	printSteps()
+	return r
 }
 
 // handleAudioFromVideo extracts the audio track of a video into its own
 // file, e.g. "shrink clip.mp4 mp3".
-func handleAudioFromVideo(input string, audioFmt string, compress string, duration float64) (string, error) {
+func handleAudioFromVideo(input string, audioFmt string, compress string, duration float64) (*fileReport, error) {
 	level := compress
 	if compress == "" {
 		compress = "compress"
@@ -401,15 +449,14 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, durati
 
 	took, err := runFFmpegWithDuration("extracting audio", duration, args...)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %v", err)
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	finishJob(input, out, took, "extract_audio")
-	return out, nil
+	return finishJob(input, out, took, "extract_audio"), nil
 }
 
 // handleVideoToImage grabs a single frame from a video, e.g.
 // "shrink clip.mp4 png". Resolution target scales the grabbed frame.
-func handleVideoToImage(input string, resolution string, imageFmt string, compress string, duration float64) (string, error) {
+func handleVideoToImage(input string, resolution string, imageFmt string, compress string, duration float64) (*fileReport, error) {
 	level := compress
 	if compress == "" {
 		compress = "compress"
@@ -428,8 +475,7 @@ func handleVideoToImage(input string, resolution string, imageFmt string, compre
 
 	took, err := runFFmpegWithDuration("grabbing frame", duration, args...)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %v", err)
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	finishJob(input, out, took, "grab_frame")
-	return out, nil
+	return finishJob(input, out, took, "grab_frame"), nil
 }

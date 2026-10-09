@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -65,8 +66,12 @@ type machineError struct {
 	Suggestions  []string `json:"suggestions,omitempty"`
 }
 
-// machineFiles collects per-file results for the final document.
-var machineFiles []machineFile
+// machineFiles collects per-file results for the final document. The
+// mutex guards appends from parallel batch workers.
+var (
+	machineFiles   []machineFile
+	machineFilesMu sync.Mutex
+)
 
 // machineSkipped counts files passed over because their kind had no target.
 var machineSkipped = map[string]int{}
@@ -128,9 +133,13 @@ func emitMachineOutput(folder string, recursive bool, failures []machineFailure,
 	printJSON(out)
 }
 
-// machineSteps converts the recorded step timings and clears them, so each
-// file carries its own breakdown.
-func machineSteps() []machineStep {
+// machineStepsFor converts an input's recorded step timings and clears
+// them, so each file carries its own breakdown.
+func machineStepsFor(input string) []machineStep {
+	stepsMu.Lock()
+	steps := stepsByFile[input]
+	delete(stepsByFile, input)
+	stepsMu.Unlock()
 	if len(steps) == 0 {
 		return nil
 	}
@@ -138,7 +147,6 @@ func machineSteps() []machineStep {
 	for _, s := range steps {
 		out = append(out, machineStep{Name: s.name, MS: s.dur.Milliseconds()})
 	}
-	steps = nil
 	return out
 }
 

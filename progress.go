@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -23,71 +25,132 @@ func isTerminal(f *os.File) bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-// interrupt state, shared by every ffmpeg run. The first Ctrl+C
-// interrupts the current ffmpeg (graceful first, force kill 2s later
-// if it stalls); registering once avoids per-run signal plumbing.
+// ---- interrupt handling ----
+//
+// One process-wide handler covers however many ffmpegs are in flight:
+// the first Ctrl+C interrupts them all (graceful SIGINT first, force
+// kill 2s later if one stalls), deletes their partial output files -
+// ffmpeg cannot resume, so leftovers are useless - and exits 130. Each
+// run registers its ffmpeg so the handler knows what to stop.
+
 var (
 	interrupted atomic.Bool
-	interruptCh = make(chan os.Signal, 1)
+	activeMu    sync.Mutex
+	activeRuns  = map[*exec.Cmd]string{} // running ffmpeg -> its partial output
+	runWG       sync.WaitGroup
 )
 
-// watchInterrupt arms interrupt forwarding to cmd and reports whether a
-// Ctrl+C arrived while it ran. The returned stop function disarms it.
-func watchInterrupt(cmd *exec.Cmd) (fired func() bool, stop func()) {
-	signal.Notify(interruptCh, os.Interrupt)
+// errCancelled marks a run ended by Ctrl+C. The interrupt handler owns
+// cleanup and the exit; callers just unwind with this error.
+var errCancelled = errors.New("cancelled")
+
+func init() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
 	go func() {
-		select {
-		case <-interruptCh:
-			interrupted.Store(true)
+		<-sig
+		interrupted.Store(true)
+		var partials []string
+		activeMu.Lock()
+		for cmd, out := range activeRuns {
 			if cmd.Process != nil {
 				cmd.Process.Signal(os.Interrupt)
-				go func() {
+				go func(c *exec.Cmd) {
 					time.Sleep(2 * time.Second)
-					cmd.Process.Kill()
-				}()
+					if c.Process != nil {
+						c.Process.Kill()
+					}
+				}(cmd)
 			}
-		case <-done:
+			if out != "" && fileExists(out) {
+				os.Remove(out)
+				partials = append(partials, out)
+			}
 		}
+		activeMu.Unlock()
+		runWG.Wait() // let every interrupted ffmpeg finish dying
+		prefix := "shrink: "
+		if m := cancelMark(); m != "" {
+			prefix = m + " "
+		}
+		msg := "cancelled"
+		if len(partials) == 1 {
+			msg = fmt.Sprintf("cancelled - deleted partial %s", partials[0])
+		} else if len(partials) > 1 {
+			msg = fmt.Sprintf("cancelled - deleted %d partial files", len(partials))
+		}
+		fmt.Fprintf(os.Stderr, "\r\033[K\033[?25h%s%s\n", prefix, msg)
+		os.Exit(130)
 	}()
-	return interrupted.Load, func() {
-		signal.Stop(interruptCh)
-		close(done)
-	}
+}
+
+// registerRun ties a started ffmpeg and its partial output to the
+// interrupt handler. unregisterRun must be called when it exits.
+func registerRun(cmd *exec.Cmd, outPath string) {
+	runWG.Add(1)
+	activeMu.Lock()
+	activeRuns[cmd] = outPath
+	activeMu.Unlock()
+}
+
+func unregisterRun(cmd *exec.Cmd) {
+	activeMu.Lock()
+	delete(activeRuns, cmd)
+	activeMu.Unlock()
+	runWG.Done()
+}
+
+// parallel is set when a batch runs more than one worker at once:
+// per-file reporting is held back until the run completes, so results
+// can print in input order.
+var parallel bool
+
+// parallelTTY is set when that parallel batch is on an interactive
+// terminal and draws the one shared progress line.
+var parallelTTY bool
+
+// progressSink is where an ffmpeg run's -progress stream goes: the live
+// per-file bar, or one shared line when several files encode at once.
+type progressSink interface {
+	render(pct float64) // fraction complete, 0..1
+	setSpeed(v float64) // ffmpeg speed, x realtime
+	spin()              // duration unknown; keep the display alive
+	markEnd()           // ffmpeg sent progress=end
+	sawEnd() bool
+	done() // the file finished successfully
 }
 
 // runFFmpeg returns the run's elapsed wall time along with any error,
 // so the done message can include "took 12s". Used when no duration is
 // known yet (still images); video/audio paths call
 // runFFmpegWithDuration with the value from their earlier probe.
-// A Ctrl+C during the run kills ffmpeg and deletes the partial output
-// file (ffmpeg cannot resume, so leftovers are useless).
 func runFFmpeg(label string, args ...string) (time.Duration, error) {
-	probeDone := trackStep("probe duration")
-	total := probeDuration(inputPathFromArgs(args))
+	input := inputPathFromArgs(args)
+	probeDone := trackStep(input, "probe duration")
+	total := probeDuration(input)
 	probeDone()
 	return runFFmpegWithDuration(label, total, args...)
 }
 
 // runFFmpegWithDuration is runFFmpeg with a known input duration (0 =
 // unknown), skipping the per-run probe when the caller already has one.
+// Interactive runs draw the live bar - or, in a parallel batch, the one
+// shared line covering every in-flight file.
 func runFFmpegWithDuration(label string, total float64, args ...string) (time.Duration, error) {
+	if interrupted.Load() {
+		return 0, errCancelled
+	}
 	start := time.Now()
+	inputPath := inputPathFromArgs(args)
 	outPath := outputArgFromArgs(args)
-	if machine {
-		// no bar in machine mode; ffmpeg's errors still reach stderr
+	if machine || !isTerminal(os.Stderr) {
 		if err := runFFmpegQuiet(label, args, outPath); err != nil {
 			return 0, err
 		}
-		recordStep("encode ("+label+")", time.Since(start))
+		recordStep(inputPath, "encode ("+label+")", time.Since(start))
 		return time.Since(start), nil
 	}
-	if !isTerminal(os.Stderr) {
-		if err := runFFmpegQuiet(label, args, outPath); err != nil {
-			return 0, err
-		}
-		recordStep("encode ("+label+")", time.Since(start))
-		return time.Since(start), nil
-	}
+
 	cmd := exec.Command("ffmpeg", append([]string{
 		"-hide_banner", "-loglevel", "error", "-nostats", "-nostdin", "-y",
 		"-stats_period", "0.2", "-progress", "pipe:1",
@@ -100,22 +163,27 @@ func runFFmpegWithDuration(label string, total float64, args ...string) (time.Du
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 
-	fmt.Fprint(os.Stderr, "\033[?25l") // hide cursor
-	defer func() {
-		fmt.Fprint(os.Stderr, "\033[?25h\n") // show cursor, newline after bar
-	}()
+	var sink progressSink
+	var stopDisplay func()
+	if parallelTTY {
+		active := liveBatch.start(filepath.Base(inputPath), total > 0)
+		sink = active
+		stopDisplay = func() { liveBatch.stop(active) }
+	} else {
+		fmt.Fprint(os.Stderr, "\033[?25l") // hide cursor
+		sink = newBar(label, total)
+		stopDisplay = func() { fmt.Fprint(os.Stderr, "\033[?25h\n") } // show cursor, newline after bar
+	}
+	defer stopDisplay()
 
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("could not start ffmpeg: %v", err)
 	}
-
-	interruptedNow, stopWatch := watchInterrupt(cmd)
-	defer stopWatch()
+	registerRun(cmd, outPath)
+	defer unregisterRun(cmd)
 
 	// short files finish before a bar is even worth drawing
-	if total > 0 && total < 2 {
-		bar := newBar(label, total)
-		bar.skip = true
+	if !parallelTTY && total > 0 && total < 2 {
 		readErr := make(chan error, 1)
 		go func() {
 			defer stdout.Close()
@@ -123,51 +191,40 @@ func runFFmpegWithDuration(label string, total float64, args ...string) (time.Du
 		}()
 		waitErr := cmd.Wait()
 		<-readErr
-		return finishRun(stderr.String(), waitErr, outPath, args, interruptedNow, start, label)
+		return finishRun(stderr.String(), waitErr, args, start, label)
 	}
 
-	bar := newBar(label, total)
 	readErr := make(chan error, 1)
 	go func() {
 		defer stdout.Close()
-		readErr <- trackProgress(bar, stdout, total)
+		readErr <- trackProgress(sink, stdout, total)
 	}()
 
 	waitErr := cmd.Wait()
 	trackErr := <-readErr
 
-	// Ctrl+C takes priority, whatever ffmpeg's exit code was
-	if interruptedNow() {
-		fmt.Fprint(os.Stderr, "\033[?25h\n") // defers don't run on os.Exit
-		deletePartial(outPath)
-		os.Exit(130)
-	}
-
-	if waitErr == nil && trackErr == nil && !bar.sawEnd {
+	if waitErr == nil && trackErr == nil && !sink.sawEnd() {
 		// some builds/muxers never send progress=end; close out the
 		// bar only on a genuinely successful run
-		bar.done()
+		sink.done()
 	}
 
 	// on failure, wipe the bar line so the error isn't preceded by a 100%
-	if waitErr != nil {
+	if waitErr != nil && !parallelTTY {
 		fmt.Fprint(os.Stderr, "\r\033[K")
 	}
 
 	if trackErr != nil {
 		return 0, fmt.Errorf("progress read error: %v", trackErr)
 	}
-	return finishRun(stderr.String(), waitErr, outPath, args, interruptedNow, start, label)
+	return finishRun(stderr.String(), waitErr, args, start, label)
 }
 
 // finishRun turns a finished ffmpeg process into the return value of
 // runFFmpegWithDuration: mapped error messages, recorded step time.
-func finishRun(stderr string, waitErr error, outPath string, args []string, interruptedNow func() bool, start time.Time, label string) (time.Duration, error) {
-	// Ctrl+C takes priority, whatever ffmpeg's exit code was
-	if interruptedNow() {
-		deletePartial(outPath)
-		fmt.Fprint(os.Stderr, "\033[?25h\n") // defers don't run on os.Exit
-		os.Exit(130)
+func finishRun(stderr string, waitErr error, args []string, start time.Time, label string) (time.Duration, error) {
+	if interrupted.Load() {
+		return 0, errCancelled
 	}
 	if waitErr != nil {
 		msg := stderr
@@ -186,7 +243,7 @@ func finishRun(stderr string, waitErr error, outPath string, args []string, inte
 		}
 		return 0, fmt.Errorf("ffmpeg failed: %v", waitErr)
 	}
-	recordStep("encode ("+label+")", time.Since(start))
+	recordStep(inputPathFromArgs(args), "encode ("+label+")", time.Since(start))
 	return time.Since(start), nil
 }
 
@@ -197,23 +254,128 @@ func drainProgress(stdout io.Reader) error {
 	return err
 }
 
-// deletePartial removes the unfinished output file after a cancel.
-// ffmpeg cannot resume, so a partial file is useless. The leading
-// wipe replaces any half-drawn progress bar with the cancel message.
-func deletePartial(outPath string) {
-	prefix := "shrink: "
-	if m := cancelMark(); m != "" {
-		prefix = m + " "
-	}
-	msg := "cancelled"
-	if outPath != "" && fileExists(outPath) {
-		if err := os.Remove(outPath); err == nil {
-			msg = fmt.Sprintf("cancelled - deleted partial %s", outPath)
-		} else {
-			msg = fmt.Sprintf("cancelled - could not delete partial %s: %v", outPath, err)
+// ---- shared batch line ----
+//
+// When several files encode at once, one line reports the whole run:
+// how many files are done plus each in-flight file's progress.
+
+// activeFile is one in-flight encode's slice of the shared line.
+type activeFile struct {
+	b     *batchBar
+	name  string
+	known bool // duration known → show a percentage
+
+	pct   float64
+	speed float64
+}
+
+func (a *activeFile) render(pct float64) {
+	a.b.mu.Lock()
+	a.pct = pct
+	a.b.mu.Unlock()
+	a.b.redraw()
+}
+
+func (a *activeFile) setSpeed(v float64) {
+	a.b.mu.Lock()
+	a.speed = v
+	a.b.mu.Unlock()
+}
+
+func (a *activeFile) spin() { a.b.redraw() }
+
+func (a *activeFile) markEnd()     {}
+func (a *activeFile) sawEnd() bool { return true } // the shared line never draws a per-file final state
+func (a *activeFile) done()        {}
+
+// batchBar is the one shared progress line for a parallel folder run.
+type batchBar struct {
+	mu       sync.Mutex
+	total    int
+	done     int
+	failed   int
+	actives  []*activeFile
+	lastDraw time.Time
+}
+
+var liveBatch = &batchBar{}
+
+func (b *batchBar) begin(total int) {
+	b.mu.Lock()
+	b.total, b.done, b.failed = total, 0, 0
+	b.actives = nil
+	b.lastDraw = time.Time{}
+	b.mu.Unlock()
+}
+
+func (b *batchBar) start(name string, known bool) *activeFile {
+	a := &activeFile{b: b, name: name, known: known}
+	b.mu.Lock()
+	b.actives = append(b.actives, a)
+	b.mu.Unlock()
+	return a
+}
+
+func (b *batchBar) stop(a *activeFile) {
+	b.mu.Lock()
+	for i, x := range b.actives {
+		if x == a {
+			b.actives = append(b.actives[:i], b.actives[i+1:]...)
+			break
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\r\033[K%s%s\n", prefix, msg)
+	b.mu.Unlock()
+}
+
+// complete records a finished file and redraws.
+func (b *batchBar) complete(ok bool) {
+	b.mu.Lock()
+	if ok {
+		b.done++
+	} else {
+		b.failed++
+	}
+	b.mu.Unlock()
+	b.redraw()
+}
+
+func (b *batchBar) redraw() {
+	b.mu.Lock()
+	if time.Since(b.lastDraw) < 100*time.Millisecond {
+		b.mu.Unlock()
+		return
+	}
+	b.lastDraw = time.Now()
+	var sb strings.Builder
+	sb.WriteString(ui.bold(fmt.Sprintf("%d/%d", b.done+b.failed, b.total)))
+	sb.WriteString(ui.dim(" done"))
+	if b.failed > 0 {
+		sb.WriteString(ui.yellow(fmt.Sprintf(" %d failed", b.failed)))
+	}
+	shown := b.actives
+	if len(shown) > 3 {
+		shown = shown[:3]
+	}
+	for _, a := range shown {
+		sb.WriteString(ui.dim(" · "))
+		sb.WriteString(ui.cyan(a.name))
+		if a.known {
+			sb.WriteString(fmt.Sprintf(" %3d%%", int(a.pct*100+0.5)))
+		}
+		if a.speed > 0 {
+			sb.WriteString(ui.dim(fmt.Sprintf(" %4.1fx", a.speed)))
+		}
+	}
+	if n := len(b.actives) - len(shown); n > 0 {
+		sb.WriteString(ui.dim(fmt.Sprintf(" · +%d", n)))
+	}
+	fmt.Fprintf(os.Stderr, "\r\033[K%s", sb.String())
+	b.mu.Unlock()
+}
+
+// clear wipes the shared line so per-file results can print cleanly.
+func (b *batchBar) clear() {
+	fmt.Fprint(os.Stderr, "\r\033[K")
 }
 
 // outputArgFromArgs returns the last positional (non-flag) argument,
@@ -227,32 +389,66 @@ func outputArgFromArgs(args []string) string {
 	return ""
 }
 
-// runFFmpegQuiet runs ffmpeg without the bar (non-tty) and pipes ffmpeg's
-// stderr directly to ours, like the original simple behavior. Ctrl+C still
-// cleans up the partial output file.
+// runFFmpegQuiet runs ffmpeg without any live display (machine mode or
+// non-tty stderr) and maps failures to friendly messages. In machine
+// mode ffmpeg's stderr is captured instead of passed through, so the
+// JSON document stays the only thing on stdout.
 func runFFmpegQuiet(label string, args []string, outPath string) error {
+	if interrupted.Load() {
+		return errCancelled
+	}
 	cmd := exec.Command("ffmpeg", append([]string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}, args...)...)
-	cmd.Stderr = os.Stderr
+	var stderr strings.Builder
+	if machine {
+		cmd.Stderr = &stderr
+	} else {
+		cmd.Stderr = os.Stderr
+	}
 	if !machine {
-		fmt.Fprintf(os.Stderr, "%s\n", ui.cyan(label+"..."))
+		name := label
+		if batchMode {
+			// in folder mode several files can encode at once, so say
+			// which file this line is for
+			name = label + " " + filepath.Base(inputPathFromArgs(args))
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", ui.cyan(name+"..."))
 	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	w, stopWatch := watchCancel(cmd)
-	defer stopWatch()
+	registerRun(cmd, outPath)
+	defer unregisterRun(cmd)
 	err := cmd.Wait()
-	if w.interrupted.Load() {
-		deletePartial(outPath)
-		os.Exit(130)
+	if interrupted.Load() {
+		return errCancelled
+	}
+	if err == nil {
+		return nil
+	}
+	if !machine {
+		return err
+	}
+	msg := stderr.String()
+	// keep stderr out of the JSON stream; hand back the mapped message
+	if enc := parseMissingEncoder(msg); enc != "" {
+		return fmt.Errorf("your ffmpeg build is missing the %q encoder\ntry: brew install ffmpeg (full build), or pick a different output format", enc)
+	}
+	if strings.Contains(msg, "Output file does not contain any stream") {
+		return fmt.Errorf("the input has no audio track, so there is nothing to extract - use a video target instead (e.g. shrink %s mp4), or grab a frame (e.g. png)", inputPathFromArgs(args))
+	}
+	if strings.Contains(msg, "Error opening output file") {
+		return fmt.Errorf("ffmpeg could not write %q: %s", filepath.Ext(args[len(args)-1]), firstMeaningfulLine(msg))
+	}
+	if msg != "" {
+		return fmt.Errorf("ffmpeg failed: %s", strings.TrimRight(msg, "\n"))
 	}
 	return err
 }
 
-// trackProgress scans ffmpeg's `-progress` key=value stream and renders
-// the shared bar. It never prints a final state on its own: the caller
-// decides whether the run counts as finished (bar.done) or failed (erase).
-func trackProgress(bar *bar, stdout io.Reader, total float64) error {
+// trackProgress scans ffmpeg's `-progress` key=value stream and feeds
+// the sink. It never prints a final state on its own: the caller
+// decides whether the run counts as finished (done) or failed (erase).
+func trackProgress(sink progressSink, stdout io.Reader, total float64) error {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -260,27 +456,27 @@ func trackProgress(bar *bar, stdout io.Reader, total float64) error {
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "out_time_us="):
-			if bar.total <= 0 {
-				bar.spin()
+			if total <= 0 {
+				sink.spin()
 				continue
 			}
 			if us, ok := atof(strings.TrimPrefix(line, "out_time_us=")); ok {
-				pct := us / 1e6 / bar.total
+				pct := us / 1e6 / total
 				if pct > 1 {
 					pct = 1
 				}
 				if pct < 0 {
 					pct = 0
 				}
-				bar.render(pct)
+				sink.render(pct)
 			}
 		case strings.HasPrefix(line, "speed="):
 			if v, ok := atof(strings.TrimPrefix(line, "speed=")); ok {
-				bar.setSpeed(v)
+				sink.setSpeed(v)
 			}
 		case line == "progress=end":
-			bar.sawEnd = true
-			bar.done()
+			sink.markEnd()
+			sink.done()
 		}
 	}
 	return scanner.Err()
@@ -296,22 +492,7 @@ func inputPathFromArgs(args []string) string {
 	return ""
 }
 
-// totalDuration returns the duration of path in seconds (0 if unknown). Uses ffprobe.
-func totalDuration(path string) float64 {
-	if path == "" {
-		return 0
-	}
-	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1", path).Output()
-	if err != nil {
-		return 0
-	}
-	if v, ok := atof(strings.TrimSpace(string(out))); ok {
-		return v
-	}
-	return 0
-}
-
+// atof parses a plain decimal string (ffprobe/ffmpeg -progress values).
 func atof(s string) (float64, bool) {
 	var f float64
 	_, err := fmt.Sscan(s, &f)
@@ -337,7 +518,7 @@ type bar struct {
 	spinIdx    int     // spinner frame
 	lastFiled  int     // last printed fill count (redraw throttle)
 	lastPos    float64 // latest known fraction complete
-	sawEnd     bool    // ffmpeg sent "progress=end" for this run
+	endSeen    bool    // ffmpeg sent "progress=end" for this run
 	start      time.Time
 	lastRedraw time.Time
 }
@@ -350,6 +531,9 @@ func newBar(label string, total float64) *bar {
 func (b *bar) elapsed() time.Duration { return time.Since(b.start) }
 
 func (b *bar) setSpeed(v float64) { b.speed = v }
+
+func (b *bar) markEnd()     { b.endSeen = true }
+func (b *bar) sawEnd() bool { return b.endSeen }
 
 func (b *bar) render(pct float64) {
 	if pct < 0 {

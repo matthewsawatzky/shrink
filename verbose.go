@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -19,24 +20,31 @@ type step struct {
 	dur  time.Duration
 }
 
-var steps []step
+// Steps are recorded per input file, so parallel batch runs can never
+// mix one file's timings into another's report.
+var (
+	stepsMu     sync.Mutex
+	stepsByFile = map[string][]step{}
+)
 
-// trackStep starts timing a named stage. The returned function stops the
-// clock; outside verbose/machine mode it is a no-op.
-func trackStep(name string) func() {
+// trackStep starts timing a named stage of one input. The returned
+// function stops the clock; outside verbose/machine mode it is a no-op.
+func trackStep(input, name string) func() {
 	if !verbose && !machine {
 		return func() {}
 	}
 	start := time.Now()
-	return func() { recordStep(name, time.Since(start)) }
+	return func() { recordStep(input, name, time.Since(start)) }
 }
 
-// recordStep appends a completed stage to the step list.
-func recordStep(name string, d time.Duration) {
+// recordStep appends a completed stage to its input's step list.
+func recordStep(input, name string, d time.Duration) {
 	if !verbose && !machine {
 		return
 	}
-	steps = append(steps, step{name, d})
+	stepsMu.Lock()
+	stepsByFile[input] = append(stepsByFile[input], step{name, d})
+	stepsMu.Unlock()
 }
 
 // formatMS renders a duration in whole milliseconds, verbose's only unit.
@@ -44,12 +52,19 @@ func formatMS(d time.Duration) string {
 	return fmt.Sprintf("%dms", (d + 500*time.Microsecond).Milliseconds())
 }
 
-// printSteps lists every recorded stage under the done line, plus the total
-// wall time, and clears the list for a next run. Batch runs skip the total
-// label because their summary line already reports whole-run time. Machine
-// mode carries the steps in its JSON instead.
-func printSteps() {
-	if machine || !verbose || len(steps) == 0 {
+// printStepsFor lists an input's recorded stages under the done line,
+// plus the total wall time, and clears them. Batch runs skip the total
+// label because their summary line already reports whole-run time.
+// Machine mode carries the steps in its JSON instead.
+func printStepsFor(input string) {
+	if machine || !verbose {
+		return
+	}
+	stepsMu.Lock()
+	steps := stepsByFile[input]
+	delete(stepsByFile, input)
+	stepsMu.Unlock()
+	if len(steps) == 0 {
 		return
 	}
 	width := 0
@@ -66,5 +81,4 @@ func printSteps() {
 		fmt.Fprintf(os.Stderr, "  %s %s  %s\n",
 			ui.dim("·"), ui.dim(fmt.Sprintf("%-*s", width, "total")), ui.bold(formatMS(time.Since(progStart))))
 	}
-	steps = nil
 }

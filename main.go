@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -109,6 +110,7 @@ func usage() {
 	for _, f := range []struct{ name, desc string }{
 		{"-v, --verbose", "show step timings, and use ms and KB everywhere"},
 		{"-r, --recursive", "with a folder, also scan subfolders"},
+		{"-j, --jobs N", "folder mode: encode N files at once (default 2)"},
 		{"-m, --machine", "emit JSON instead of human output (for scripts/LLMs)"},
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", f.name)), f.desc)
@@ -215,7 +217,6 @@ func unknownTargetError(arg string) {
 		fmt.Fprintf(os.Stderr, "%s %s\n", errMark(),
 			ui.red(fmt.Sprintf("%s is a valid %s input, but shrink cannot write %s", arg, kind, arg)))
 		fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim(kind+" outputs:"), strings.Join(outputFormats(kind), ", "))
-		printSteps()
 		os.Exit(1)
 	}
 	if machine {
@@ -234,7 +235,6 @@ func unknownTargetError(arg string) {
 	for _, kind := range mediaKinds {
 		fmt.Fprintf(os.Stderr, "    %s  %s\n", ui.cyan(fmt.Sprintf("%-10s", kind)), strings.Join(outputFormats(kind), ", "))
 	}
-	printSteps()
 	os.Exit(1)
 }
 
@@ -265,7 +265,6 @@ func unsupportedTypeError(input string) {
 		}
 		fmt.Fprintf(os.Stderr, "    %s  %s\n", ui.cyan(fmt.Sprintf("%-5s", kind)), strings.Join(exts, ", "))
 	}
-	printSteps()
 	os.Exit(1)
 }
 
@@ -308,19 +307,19 @@ type options struct {
 	audioFmt, compress string
 }
 
-// processOne runs a single compression job and returns the output path.
+// processOne runs a single compression job and returns its report.
 // All failures come back as errors so batch runs can continue.
-func processOne(input string, o options) (string, error) {
+func processOne(input string, o options) (*fileReport, error) {
 	kind := detectKind(input)
-	probeDone := trackStep("inspect input")
+	probeDone := trackStep(input, "inspect input")
 	info := probeFile(input)
 	if kind != "unknown" && !info.ok {
-		return "", fmt.Errorf("%s does not look like a valid %s file", input, kind)
+		return nil, fmt.Errorf("%s does not look like a valid %s file", input, kind)
 	}
 
 	// for audio extraction, make sure there is an audio track to extract
 	if kind == "video" && o.audioFmt != "" && !info.hasAudio {
-		return "", fmt.Errorf("%s has no audio track - nothing to extract as %s (grab a frame instead, e.g. shrink %s png)", input, o.audioFmt, input)
+		return nil, fmt.Errorf("%s has no audio track - nothing to extract as %s (grab a frame instead, e.g. shrink %s png)", input, o.audioFmt, input)
 	}
 	probeDone()
 
@@ -328,7 +327,7 @@ func processOne(input string, o options) (string, error) {
 	// makes sense of them (video -> audio extracts the track, video -> image
 	// grabs a frame); checkKindTargets already rejected anything else.
 	if err := checkKindTargets(kind, o); err != nil {
-		return "", err
+		return nil, err
 	}
 	switch kind {
 	case "video":
@@ -345,24 +344,36 @@ func processOne(input string, o options) (string, error) {
 	case "audio":
 		return handleAudio(input, coalesce(o.audioFmt, "mp3"), o.compress, info.duration)
 	}
-	return "", fmt.Errorf("no handler for %s", input)
+	return nil, fmt.Errorf("no handler for %s", input)
 }
 
 func main() {
 	args := os.Args[1:]
 
 	// -v/--verbose, -r and -m are plain flags and may appear anywhere;
-	// the input is the first thing left after flags are pulled out.
+	// -j/--jobs takes a number; the input is the first thing left after
+	// flags are pulled out.
 	var positional []string
 	recursive := false
-	for _, a := range args {
-		switch a {
+	jobs := 2
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
 		case "-v", "--verbose":
 			verbose = true
 		case "-m", "--machine":
 			machine = true
 		case "-r", "--recursive":
 			recursive = true
+		case "-j", "--jobs":
+			i++
+			if i >= len(args) {
+				exitError("jobs needs a number, e.g. shrink folder ~/Media -j 4 jpeg")
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				exitError("jobs needs a number of 1 or more, got %q", args[i])
+			}
+			jobs = n
 		default:
 			positional = append(positional, a)
 		}
@@ -428,7 +439,7 @@ func main() {
 	}
 
 	if info.IsDir() {
-		batchProcess(input, o, recursive)
+		batchProcess(input, o, recursive, jobs)
 		return
 	}
 
@@ -437,7 +448,9 @@ func main() {
 		if machine {
 			exitMachineError(machineError{Error: err.Error(), Input: input})
 		}
-		exitError("%v", err)
+		fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(err.Error()))
+		printStepsFor(input)
+		os.Exit(1)
 	}
 	if machine {
 		emitMachineOutput("", false, nil, time.Since(start), -1)
@@ -494,7 +507,6 @@ func targetConflictError(input string, formats []string) {
 	for _, s := range suggestions {
 		fmt.Fprintf(os.Stderr, "    %s\n", ui.cyan(s))
 	}
-	printSteps()
 	os.Exit(1)
 }
 
@@ -538,6 +550,5 @@ func exitError(f string, a ...interface{}) {
 		exitMachineError(machineError{Error: msg})
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(msg))
-	printSteps()
 	os.Exit(1)
 }
