@@ -37,6 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install
 Homebrew:
 ```bash
 brew tap matthewsawatzky/tap
+brew trust matthewsawatzky/tap    # required once by modern Homebrew
 brew install shrink
 ```
 Go:
