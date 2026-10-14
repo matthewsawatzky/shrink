@@ -9,7 +9,10 @@ shrink
 testmedia/
 *.mp4
 *.MOV
+*.png
 
 # scratch
 info.txt
 info-gen.sh
+
+.gitignore
