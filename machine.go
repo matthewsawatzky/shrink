@@ -50,12 +50,15 @@ type machineSummary struct {
 // machineOutput is the single document emitted for any run: one entry per
 // compressed file, plus folder metadata when a folder was scanned.
 type machineOutput struct {
-	Folder    string           `json:"folder,omitempty"`
-	Recursive bool             `json:"recursive,omitempty"`
-	Files     []machineFile    `json:"files"`
-	Failed    []machineFailure `json:"failed,omitempty"`
-	Skipped   map[string]int   `json:"skipped,omitempty"`
-	Summary   machineSummary   `json:"summary"`
+	Version     string           `json:"version,omitempty"`
+	DryRun      bool             `json:"dry_run,omitempty"`
+	Folder      string           `json:"folder,omitempty"`
+	Recursive   bool             `json:"recursive,omitempty"`
+	Files       []machineFile    `json:"files"`
+	Failed      []machineFailure `json:"failed,omitempty"`
+	Skipped     map[string]int   `json:"skipped,omitempty"`
+	AlreadyDone int              `json:"already_done,omitempty"`
+	Summary     machineSummary   `json:"summary"`
 }
 
 type machineError struct {
@@ -75,6 +78,14 @@ var (
 
 // machineSkipped counts files passed over because their kind had no target.
 var machineSkipped = map[string]int{}
+
+// machineDryRun marks the document as a -n preview: entries are what
+// would happen, nothing was encoded.
+var machineDryRun bool
+
+// machineAlreadyDone counts files skipped because their output already
+// existed (re-run with -o to redo them).
+var machineAlreadyDone int
 
 func printJSON(v interface{}) {
 	enc := json.NewEncoder(os.Stdout)
@@ -119,13 +130,17 @@ func emitMachineOutput(folder string, recursive bool, failures []machineFailure,
 	for _, n := range machineSkipped {
 		sum.Skipped += n
 	}
+	sum.Skipped += machineAlreadyDone
 
 	out := machineOutput{
-		Folder:    folder,
-		Recursive: recursive,
-		Files:     files,
-		Failed:    failures,
-		Summary:   sum,
+		Version:     version,
+		DryRun:      machineDryRun,
+		Folder:      folder,
+		Recursive:   recursive,
+		Files:       files,
+		Failed:      failures,
+		AlreadyDone: machineAlreadyDone,
+		Summary:     sum,
 	}
 	if len(machineSkipped) > 0 {
 		out.Skipped = machineSkipped

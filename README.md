@@ -1,6 +1,11 @@
 # Shrink - a media shrinking tool
 `We are like a dwarf perched on the shoulders of a giant` ~ William of Conches
 
+[![CI](https://github.com/matthewsawatzky/shrink/actions/workflows/ci.yml/badge.svg)](https://github.com/matthewsawatzky/shrink/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/matthewsawatzky/shrink?logo=github)](https://github.com/matthewsawatzky/shrink/releases)
+[![license](https://img.shields.io/github/license/matthewsawatzky/shrink)](LICENSE)
+[![Go](https://img.shields.io/github/go-version/go/matthewsawatzky/shrink?logo=go)](go.mod)
+
 > ffmpeg is the background tool, thank you FFmpeg Devs
 
 
@@ -12,10 +17,12 @@ Shrink relies on FFmpeg in the background to do the compression and encoding, an
 
 Shrink supports:
 - Compressing video, image, and audio files with three preset levels (compress, spacesaver, neversee)
+- Modern codecs: hevc and av1 targets (much smaller files at the same quality), and hardware encoders with "-f" (VideoToolbox on macOS - much faster)
 - Turning videos (with audio) into audio files
 - Grabbing a frame from a video as an image
 - Changing the resolution on videos and images (scaling = lossy; smaller inputs are never upscaled)
-- Compressing or standardizing all media inside a folder (recursive with "-r", parallel with "-j")
+- Compressing or standardizing all media inside a folder (recursive with "-r", parallel with "-j", dry-run preview with "-n")
+- Incremental folder runs: files that were already converted are skipped, so re-running never double-compresses ("-o" redoes them)
 - Better* 3rd party CLI support and Agent handling when using machine options ("-m" flag)
 
 ## Requirements:
@@ -23,8 +30,22 @@ Shrink supports:
 - A full FFmpeg build for every output format - stripped-down builds are missing encoders like webp and vorbis (`brew install ffmpeg` gets everything)
 
 ## Install:
+macOS / Linux (arm64 + amd64):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.sh | sh
+```
+Homebrew:
+```bash
+brew tap matthewsawatzky/tap
+brew install shrink
+```
+Go:
+```bash
+go install github.com/matthewsawatzky/shrink@latest
+```
+Windows (10+, amd64/arm64):
+```powershell
+irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | iex
 ```
 Or grab a binary from the [releases page](https://github.com/matthewsawatzky/shrink/releases) and put it on your PATH.
 
@@ -48,7 +69,7 @@ Outputs are written next to the input, and existing files are never overwritten 
 | Types | Options |
 |-------|---------|
 | `<resolution>` | 340p, 480p, 720p, 1080p, 1440p, 4k |
-| `<video format>` | mp4, mkv, webm, mov, avi |
+| `<video format>` | mp4, mkv, webm, mov, avi, hevc, av1 |
 | `<image format>` | jpeg, png, webp, gif |
 | `<audio format>` | mp3, aac, m4a, opus, ogg, wav, flac |
 | `<compression level>` | compress, spacesaver, neversee |
@@ -62,7 +83,17 @@ In folder mode, give one format per media kind (e.g. `shrink folder ~/Media jpeg
 | `-v`, `--verbose` | step timings, and ms and KB everywhere |
 | `-r`, `--recursive` | with a folder, also scan subfolders |
 | `-j`, `--jobs N` | folder mode: encode N files at once (default 2) |
+| `-f`, `--fast` | prefer hardware video encoders where available |
+| `-n`, `--dry-run` | show what would happen without encoding anything |
+| `-o`, `--overwrite` | redo outputs that already exist |
+| `-c`, `--completions` | print shell completions (zsh or bash) and exit |
 | `-V`, `--version` | print the version and exit |
+
+### Shell completions:
+```bash
+shrink --completions zsh > ~/.zfunc/_shrink    # then "fpath=(~/.zfunc $fpath)" before compinit
+shrink --completions bash > /usr/local/etc/bash_completion.d/shrink
+```
 
 ### Exit codes:
 | Code | Meaning |
@@ -75,6 +106,6 @@ In folder mode, give one format per media kind (e.g. `shrink folder ~/Media jpeg
 
 ## Releasing (maintainer):
 ```bash
-./release.sh v0.1.0 "release notes here"
+git tag v0.2.0 && git push --tags     # CI builds + publishes the release
 ```
-That tags, pushes, cross-builds (macOS/Linux, arm64/amd64) and publishes the release with checksums - `install.sh` then picks it up automatically.
+GitHub Actions cross-builds every platform (macOS/Linux/Windows, arm64/amd64), attaches checksums and publishes the release - `install.sh` picks it up immediately. (`./release.sh v0.2.0 "notes"` does the same locally.)

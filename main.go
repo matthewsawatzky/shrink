@@ -14,9 +14,23 @@ import (
 // -ldflags "-X main.version=v1.2.3"; local builds report "dev".
 var version = "dev"
 
+// fast enables -f/--fast: prefer hardware encoders (VideoToolbox on
+// macOS) for video when available, falling back to software otherwise.
+var fast bool
+
+// dryRun enables -n/--dry-run: show what a run would do without
+// encoding anything.
+var dryRun bool
+
+// overwrite enables -o/--overwrite: claim output paths that already
+// exist (replacing them) instead of skipping or bumping a counter.
+var overwrite bool
+
 // levelSpec holds the encoder settings one compression level maps to.
 type levelSpec struct {
-	videoCRF     string
+	videoCRF     string // libx264 CRF
+	hevcCRF      string // libx265 CRF (its quality scale differs from x264)
+	av1CRF       string // libsvtav1 CRF
 	audioBitrate string
 	imageQuality string // quality scale for mjpeg (2-31, higher = smaller)
 	webpQuality  string // libwebp -quality (0-100)
@@ -26,9 +40,9 @@ type levelSpec struct {
 // Preset compression levels shared by video, image and audio encoders.
 // Higher CRF = heavier compression = smaller file + lower quality.
 var compressionLevels = map[string]levelSpec{
-	"compress":   {videoCRF: "23", audioBitrate: "128k", imageQuality: "4", webpQuality: "80", vorbisQ: "5"},
-	"spacesaver": {videoCRF: "28", audioBitrate: "96k", imageQuality: "7", webpQuality: "65", vorbisQ: "3"},
-	"neversee":   {videoCRF: "34", audioBitrate: "64k", imageQuality: "12", webpQuality: "40", vorbisQ: "1"},
+	"compress":   {videoCRF: "23", hevcCRF: "28", av1CRF: "32", audioBitrate: "128k", imageQuality: "4", webpQuality: "80", vorbisQ: "5"},
+	"spacesaver": {videoCRF: "28", hevcCRF: "32", av1CRF: "40", audioBitrate: "96k", imageQuality: "7", webpQuality: "65", vorbisQ: "3"},
+	"neversee":   {videoCRF: "34", hevcCRF: "38", av1CRF: "48", audioBitrate: "64k", imageQuality: "12", webpQuality: "40", vorbisQ: "1"},
 }
 
 // Resolution map: height -> scale filter args. The min() cap never
@@ -44,22 +58,26 @@ var resolutions = map[string]string{
 	"4k":    `scale=-2:min(2160\,ih-mod(ih\,2))`,
 }
 
-// videoFormat is one output container shrink can encode video to.
+// videoFormat is one output format shrink can encode video to.
 type videoFormat struct {
 	codec string
+	ext   string // container extension; empty means the format key itself
 	args  []string
 }
 
 // Supported video formats. VP9 gets speed flags: its defaults are
 // brutally slow (it would otherwise spend minutes per encode to save a
 // few percent at these bitrates), and single-pass with -b:v 0 keeps
-// quality driven by the CRF alone.
+// quality driven by the CRF alone. hevc/av1 ride in mp4 containers;
+// the hvc1 tag lets Apple devices play the hevc result.
 var videoFormats = map[string]videoFormat{
 	"mp4":  {codec: "libx264", args: []string{"-preset", "medium", "-movflags", "+faststart"}},
 	"mkv":  {codec: "libx264", args: []string{"-preset", "medium"}},
 	"webm": {codec: "libvpx-vp9", args: []string{"-b:v", "0", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4"}},
 	"mov":  {codec: "libx264", args: []string{"-preset", "medium", "-movflags", "+faststart"}},
 	"avi":  {codec: "libx264", args: []string{"-preset", "medium"}},
+	"hevc": {codec: "libx265", ext: "mp4", args: []string{"-preset", "medium", "-tag:v", "hvc1"}},
+	"av1":  {codec: "libsvtav1", ext: "mp4", args: []string{"-preset", "8"}},
 }
 
 // imageFormat is one output format shrink can encode images to.
@@ -104,7 +122,7 @@ func usage() {
 	fmt.Fprintf(out, "%s\n", ui.bold("targets:"))
 	for _, t := range []struct{ name, desc string }{
 		{"<resolution>", "340p, 480p, 720p, 1080p, 1440p, 4k"},
-		{"<format>", "jpeg, png, webp, gif | mp4, mkv, webm, mov, avi"},
+		{"<format>", "jpeg, png, webp, gif | mp4, mkv, webm, mov, avi, hevc, av1"},
 		{"<audio>", "mp3, aac, m4a, opus, ogg, wav, flac"},
 		{"<level>", "compress, spacesaver, neversee"},
 	} {
@@ -115,7 +133,11 @@ func usage() {
 		{"-v, --verbose", "show step timings, and use ms and KB everywhere"},
 		{"-r, --recursive", "with a folder, also scan subfolders"},
 		{"-j, --jobs N", "folder mode: encode N files at once (default 2)"},
+		{"-f, --fast", "prefer hardware video encoders where available"},
+		{"-n, --dry-run", "show what would happen without encoding anything"},
+		{"-o, --overwrite", "redo outputs that already exist"},
 		{"-m, --machine", "emit JSON instead of human output (for scripts/LLMs)"},
+		{"-c, --completions", "print shell completions (zsh or bash) and exit"},
 		{"-V, --version", "print the version and exit"},
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", f.name)), f.desc)
@@ -338,16 +360,16 @@ func processOne(input string, o options) (*fileReport, error) {
 	case "video":
 		switch {
 		case o.audioFmt != "":
-			return handleAudioFromVideo(input, o.audioFmt, o.compress, info.duration)
+			return handleAudioFromVideo(input, o.audioFmt, o.compress, info)
 		case o.imageFmt != "":
-			return handleVideoToImage(input, o.resolution, o.imageFmt, o.compress, info.duration)
+			return handleVideoToImage(input, o.resolution, o.imageFmt, o.compress, info)
 		default:
-			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), o.compress, info.duration)
+			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), o.compress, info)
 		}
 	case "image":
 		return handleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"), o.compress)
 	case "audio":
-		return handleAudio(input, coalesce(o.audioFmt, "mp3"), o.compress, info.duration)
+		return handleAudio(input, coalesce(o.audioFmt, "mp3"), o.compress, info)
 	}
 	return nil, fmt.Errorf("no handler for %s", input)
 }
@@ -355,9 +377,9 @@ func processOne(input string, o options) (*fileReport, error) {
 func main() {
 	args := os.Args[1:]
 
-	// -v/--verbose, -r and -m are plain flags and may appear anywhere;
-	// -j/--jobs takes a number; the input is the first thing left after
-	// flags are pulled out.
+	// -v/--verbose, -r, -m, -f, -n and -o are plain flags and may appear
+	// anywhere; -j and -c take a value; the input is the first thing left
+	// after flags are pulled out.
 	var positional []string
 	recursive := false
 	jobs := 2
@@ -369,9 +391,21 @@ func main() {
 			machine = true
 		case "-r", "--recursive":
 			recursive = true
+		case "-f", "--fast":
+			fast = true
+		case "-n", "--dry-run":
+			dryRun = true
+		case "-o", "--overwrite":
+			overwrite = true
 		case "-V", "--version":
 			fmt.Println("shrink " + version)
 			os.Exit(0)
+		case "-c", "--completions":
+			i++
+			if i >= len(args) {
+				exitError("completions needs a shell: zsh or bash")
+			}
+			printCompletions(args[i])
 		case "-j", "--jobs":
 			i++
 			if i >= len(args) {
@@ -439,6 +473,17 @@ func main() {
 		}
 		if err := checkKindTargets(kind, o); err != nil {
 			exitError("%v", err)
+		}
+		if dryRun {
+			out := wouldProduce(input, kind, o)
+			if machine {
+				machineFiles = append(machineFiles, machineFile{Input: input, Output: out, Kind: kind})
+				machineDryRun = true
+				emitMachineOutput("", false, nil, 0, 1)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "%s dry run: would compress %s -> %s\n", doneMark(), ui.bold(input), ui.bold(out))
+			return
 		}
 	}
 

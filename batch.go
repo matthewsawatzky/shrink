@@ -89,12 +89,82 @@ func kindAllowed(kind string, o options) bool {
 	return false
 }
 
+// batchWork is one eligible file: its path, the output it would produce,
+// and the per-kind format targets that apply to it.
+type batchWork struct {
+	path string
+	out  string
+	opts options
+}
+
+// perKindOpts narrows the parsed targets to the one format that applies
+// to a file's kind, so the same-kind rule holds in batch runs (a video
+// file ignores the "mp3" target that only applies to audio files).
+func perKindOpts(kind string, o options) options {
+	fileOpts := o
+	fileOpts.videoFmt, fileOpts.imageFmt, fileOpts.audioFmt = "", "", ""
+	switch kind {
+	case "video":
+		fileOpts.videoFmt = o.videoFmt
+	case "image":
+		fileOpts.imageFmt = o.imageFmt
+	case "audio":
+		fileOpts.audioFmt = o.audioFmt
+	}
+	return fileOpts
+}
+
+// looksConverted reports whether a file's name matches the outputs
+// shrink itself produces (-compressed, level, resolution, "frame" or
+// "audio" tags), so folder re-runs don't chew their own results.
+// Camera-style names (IMG_1234) never match: the tags use dashes.
+func looksConverted(path string) bool {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	for _, suffix := range []string{
+		"-compressed", "-compress", "-spacesaver", "-neversee", "-frame", "-audio",
+	} {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	for _, res := range sortedKeys(resolutions) {
+		if strings.HasSuffix(base, "-"+res) {
+			return true
+		}
+	}
+	return false
+}
+
+// wouldProduce names the output a run would make for f, mirroring
+// processOne's routing, without encoding or bumping collision counters.
+// o must already be narrowed to f's kind (see perKindOpts).
+func wouldProduce(f, kind string, o options) string {
+	dir := filepath.Dir(f)
+	switch kind {
+	case "video":
+		switch {
+		case o.audioFmt != "":
+			return filepath.Join(dir, candidateBase(f, "audio", o.audioFmt, "audio", "", o.compress)+"."+outExt("audio", o.audioFmt))
+		case o.imageFmt != "":
+			return filepath.Join(dir, candidateBase(f, "image", o.imageFmt, "frame", o.resolution, o.compress)+"."+outExt("image", o.imageFmt))
+		default:
+			return filepath.Join(dir, candidateBase(f, "video", coalesce(o.videoFmt, "mp4"), "", o.resolution, o.compress)+"."+outExt("video", coalesce(o.videoFmt, "mp4")))
+		}
+	case "image":
+		return filepath.Join(dir, candidateBase(f, "image", coalesce(o.imageFmt, "jpeg"), "", o.resolution, o.compress)+"."+outExt("image", coalesce(o.imageFmt, "jpeg")))
+	case "audio":
+		return filepath.Join(dir, candidateBase(f, "audio", coalesce(o.audioFmt, "mp3"), "", "", o.compress)+"."+outExt("audio", coalesce(o.audioFmt, "mp3")))
+	}
+	return ""
+}
+
 // batchProcess compresses every eligible media file in dir and prints a
 // one-line summary (or a JSON document in machine mode). Format targets
 // only apply to their own kind, so videos are untouched by "mp3". With
 // more than one worker, per-file results are held back until the run
 // completes so output stays in input order, and a single shared
-// progress line covers every in-flight encode.
+// progress line covers every in-flight encode. Files whose output
+// already exists are skipped unless -o is given.
 func batchProcess(dir string, o options, recursive bool, jobs int) {
 	batchMode = true
 	start := time.Now()
@@ -115,29 +185,29 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 
 	// collect the worklist up front: skips are counted before anything
 	// runs, and each item carries only its own kind's format target
-	type workItem struct {
-		path string
-		opts options
-	}
-	var work []workItem
+	var work []batchWork
 	skipped := map[string]int{}
+	alreadyDone := 0
 	for _, f := range files {
 		kind := detectKind(f)
 		if !kindAllowed(kind, o) {
 			skipped[kind]++
 			continue
 		}
-		fileOpts := o
-		fileOpts.videoFmt, fileOpts.imageFmt, fileOpts.audioFmt = "", "", ""
-		switch kind {
-		case "video":
-			fileOpts.videoFmt = o.videoFmt
-		case "image":
-			fileOpts.imageFmt = o.imageFmt
-		case "audio":
-			fileOpts.audioFmt = o.audioFmt
+		fileOpts := perKindOpts(kind, o)
+		// an output from an earlier run - or a file that already looks
+		// like one - means there is nothing to do
+		out := wouldProduce(f, kind, fileOpts)
+		if !overwrite && (fileExists(out) || looksConverted(f)) {
+			alreadyDone++
+			continue
 		}
-		work = append(work, workItem{path: f, opts: fileOpts})
+		work = append(work, batchWork{path: f, out: out, opts: fileOpts})
+	}
+
+	if dryRun {
+		reportDryRun(dir, recursive, work, skipped, alreadyDone)
+		return
 	}
 
 	workers := jobs
@@ -244,6 +314,7 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 			machineFilesMu.Unlock()
 		}
 		machineSkipped = skipped
+		machineAlreadyDone = alreadyDone
 		emitMachineOutput(dir, recursive, failures, time.Since(start), processed)
 		if failed > 0 {
 			os.Exit(1)
@@ -252,8 +323,46 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 	}
 
 	printBatchSummary(processed, failed, skipped, inTotal, outTotal, time.Since(start))
+	if alreadyDone > 0 {
+		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
+			alreadyDone, filesWord(alreadyDone))))
+	}
 	if failed > 0 {
 		os.Exit(1)
+	}
+}
+
+// reportDryRun prints what a batch would do without encoding anything.
+func reportDryRun(dir string, recursive bool, work []batchWork, skipped map[string]int, alreadyDone int) {
+	if machine {
+		for _, w := range work {
+			machineFiles = append(machineFiles, machineFile{Input: w.path, Output: w.out, Kind: detectKind(w.path)})
+		}
+		machineDryRun = true
+		machineSkipped = skipped
+		machineAlreadyDone = alreadyDone
+		emitMachineOutput(dir, recursive, nil, 0, len(work))
+		return
+	}
+	for _, w := range work {
+		fmt.Fprintf(os.Stderr, "would compress %s -> %s\n", ui.cyan(w.path), ui.bold(w.out))
+	}
+	fmt.Fprintf(os.Stderr, "%s dry run: %d %s, nothing written\n", doneMark(), len(work), filesWord(len(work)))
+	if alreadyDone > 0 {
+		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
+			alreadyDone, filesWord(alreadyDone))))
+	}
+	var skippedTotal int
+	var breakdown []string
+	for _, kind := range mediaKinds {
+		if n := skipped[kind]; n > 0 {
+			skippedTotal += n
+			breakdown = append(breakdown, fmt.Sprintf("%d %s", n, kind))
+		}
+	}
+	if skippedTotal > 0 {
+		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("would skip %d %s (%s) - targets apply to matching files only",
+			skippedTotal, filesWord(skippedTotal), strings.Join(breakdown, ", "))))
 	}
 }
 

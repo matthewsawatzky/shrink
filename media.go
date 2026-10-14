@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,19 +23,20 @@ import (
 // already shows it - so a plain re-encode or conversion falls back to
 // "-compressed". The extension always reflects the true output format.
 func outputFileName(input, outKind, fmtName, operation, resolution, level string) string {
-	ext := filepath.Ext(fmtName)
-	switch outKind {
-	case "image":
-		if f, ok := imageFormats[fmtName]; ok {
-			ext = f.ext
-		}
-	case "audio":
-		if f, ok := audioFormats[fmtName]; ok {
-			ext = f.ext
-		}
-	case "video":
-		ext = fmtName
+	dir := filepath.Dir(input)
+	stem := candidateBase(input, outKind, fmtName, operation, resolution, level)
+	ext := outExt(outKind, fmtName)
+	out := filepath.Join(dir, stem+"."+ext)
+	// avoid overwriting existing files: bump a counter (unless -o)
+	for i := 1; !reserveOut(out); i++ {
+		out = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", stem, i, ext))
 	}
+	return out
+}
+
+// candidateBase is the "<original>-<operations>" part of an output name,
+// without extension or directory.
+func candidateBase(input, outKind, fmtName, operation, resolution, level string) string {
 	base := strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
 
 	var parts []string
@@ -47,16 +49,27 @@ func outputFileName(input, outKind, fmtName, operation, resolution, level string
 		// nothing else to name it by: a plain re-encode or conversion
 		parts = append(parts, "compressed")
 	}
+	return base + "-" + strings.Join(parts, "-")
+}
 
-	// write the output next to the original file, not in the cwd
-	dir := filepath.Dir(input)
-	name := base + "-" + strings.Join(parts, "-")
-	out := filepath.Join(dir, name+"."+ext)
-	// avoid overwriting existing files: bump a counter
-	for i := 1; !reserveOut(out); i++ {
-		out = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", name, i, ext))
+// outExt maps a format target to the file extension it really produces
+// (hevc and av1 ride in mp4 containers; audio "aac" lands in .m4a).
+func outExt(outKind, fmtName string) string {
+	switch outKind {
+	case "image":
+		if f, ok := imageFormats[fmtName]; ok {
+			return f.ext
+		}
+	case "audio":
+		if f, ok := audioFormats[fmtName]; ok {
+			return f.ext
+		}
+	case "video":
+		if f, ok := videoFormats[fmtName]; ok && f.ext != "" {
+			return f.ext
+		}
 	}
-	return out
+	return fmtName
 }
 
 // reservedOut tracks output paths handed out this run. Parallel workers
@@ -68,12 +81,16 @@ var (
 	reservedOut = map[string]bool{}
 )
 
-// reserveOut claims path for this run if no existing file or prior
-// claim holds it.
+// reserveOut claims path for this run. With -o it claims existing files
+// too (ffmpeg -y replaces them); otherwise a prior claim or an existing
+// file makes it unavailable.
 func reserveOut(path string) bool {
 	reservedMu.Lock()
 	defer reservedMu.Unlock()
-	if reservedOut[path] || fileExists(path) {
+	if reservedOut[path] {
+		return false
+	}
+	if !overwrite && fileExists(path) {
 		return false
 	}
 	reservedOut[path] = true
@@ -87,13 +104,15 @@ func fileExists(path string) bool {
 
 // mediaInfo describes everything shrink needs to know about an input
 // before encoding: whether ffmpeg can actually read it, its duration in
-// seconds (0 when absent, e.g. images), and whether it has an audio
-// track. One ffprobe call collects it all.
+// seconds (0 when absent, e.g. images), its bitrate (drives -f's
+// hardware rate), and whether it has an audio track. One ffprobe call
+// collects it all.
 type mediaInfo struct {
 	ok       bool
 	hasAudio bool
 	hasVideo bool
 	duration float64
+	bitRate  int64 // bits per second; 0 when unknown
 }
 
 // probeFile gathers input metadata via a single ffprobe invocation
@@ -102,7 +121,7 @@ type mediaInfo struct {
 // reports ok=false.
 func probeFile(path string) mediaInfo {
 	cmd := exec.Command("ffprobe", "-v", "error", "-show_entries",
-		"format=duration:stream=codec_type",
+		"format=duration,bit_rate:stream=codec_type",
 		"-of", "json", path)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -113,6 +132,7 @@ func probeFile(path string) mediaInfo {
 	var probe struct {
 		Format struct {
 			Duration string `json:"duration"`
+			BitRate  string `json:"bit_rate"`
 		}
 		Streams []struct {
 			CodecType string `json:"codec_type"`
@@ -132,6 +152,9 @@ func probeFile(path string) mediaInfo {
 	}
 	if d, err := strconv.ParseFloat(strings.TrimSpace(probe.Format.Duration), 64); err == nil {
 		info.duration = d
+	}
+	if br, err := strconv.ParseInt(strings.TrimSpace(probe.Format.BitRate), 10, 64); err == nil && br > 0 {
+		info.bitRate = br
 	}
 	return info
 }
@@ -231,7 +254,77 @@ func firstMeaningfulLine(stderr string) string {
 // going. duration is the input's length in seconds from the earlier
 // probe, passed down for the progress bar - 0 means unknown.
 
-func handleVideo(input string, resolution string, videoFmt string, compress string, duration float64) (*fileReport, error) {
+// ffmpegEncoders lists this build's encoders once per run, so -f can
+// check for hardware encoders without spawning ffmpeg every file.
+var ffmpegEncoders = sync.OnceValue(func() map[string]bool {
+	out, err := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
+	if err != nil {
+		return map[string]bool{}
+	}
+	avail := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) >= 2 {
+			avail[f[1]] = true
+		}
+	}
+	return avail
+})
+
+func encoderAvailable(name string) bool { return ffmpegEncoders()[name] }
+
+// bitrateForLevel scales a source bitrate down to what the compression
+// level asks for, in kbps, with a floor so tiny sources don't turn to mud.
+func bitrateForLevel(compress string, bitRate int64) int {
+	factor := 0.5
+	switch compress {
+	case "spacesaver":
+		factor = 0.35
+	case "neversee":
+		factor = 0.2
+	}
+	kbps := int(float64(bitRate) * factor / 1000)
+	if kbps < 250 {
+		kbps = 250
+	}
+	return kbps
+}
+
+// hwEncodeFor maps a software codec to its hardware counterpart on
+// macOS (VideoToolbox) when -f asked for speed. Hardware encoders have
+// no CRF, so the args carry a bitrate derived from the source instead.
+// ok=false means no hardware route and software proceeds unchanged.
+func hwEncodeFor(codec, compress string, info mediaInfo) (string, []string, bool) {
+	if runtime.GOOS != "darwin" || info.bitRate <= 0 {
+		return "", nil, false
+	}
+	var hw string
+	switch codec {
+	case "libx264":
+		hw = "h264_videotoolbox"
+	case "libx265":
+		hw = "hevc_videotoolbox"
+	default:
+		return "", nil, false
+	}
+	if !encoderAvailable(hw) {
+		return "", nil, false
+	}
+	return hw, []string{"-b:v", fmt.Sprintf("%dk", bitrateForLevel(compress, info.bitRate))}, true
+}
+
+// videoCRF picks the level's CRF for a codec family: each family has
+// its own quality scale, so the level table keeps one value per family.
+func videoCRF(codec string, lv levelSpec) string {
+	switch codec {
+	case "libx265":
+		return lv.hevcCRF
+	case "libsvtav1":
+		return lv.av1CRF
+	}
+	return lv.videoCRF
+}
+
+func handleVideo(input string, resolution string, videoFmt string, compress string, info mediaInfo) (*fileReport, error) {
 	if videoFmt == "" {
 		videoFmt = "mp4"
 	}
@@ -242,8 +335,26 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	levels := compressionLevels[compress]
 	vf := videoFormats[videoFmt]
 
-	args := []string{"-i", input, "-c:v", vf.codec, "-crf", levels.videoCRF}
-	args = append(args, vf.args...)
+	// -f: swap in the hardware encoder for x264/x265 targets when one
+	// exists, trading some efficiency for a much faster encode
+	codec, encArgs := vf.codec, vf.args
+	crf := videoCRF(codec, levels)
+	if fast {
+		if hw, hwArgs, ok := hwEncodeFor(codec, compress, info); ok {
+			codec = hw
+			if videoFmt == "mp4" || videoFmt == "mov" {
+				hwArgs = append(hwArgs, "-movflags", "+faststart")
+			}
+			encArgs = hwArgs
+			crf = ""
+		}
+	}
+
+	args := []string{"-i", input, "-c:v", codec}
+	if crf != "" {
+		args = append(args, "-crf", crf)
+	}
+	args = append(args, encArgs...)
 
 	if videoFmt != "webm" {
 		args = append(args, "-c:a", "aac", "-b:a", levels.audioBitrate)
@@ -262,7 +373,7 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	if resolution != "" {
 		label = "compressing + scaling"
 	}
-	took, err := runFFmpegWithDuration(label, duration, args...)
+	took, err := runFFmpegWithDuration(label, info.duration, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
@@ -315,7 +426,7 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	return finishJob(input, out, took, "compress"), nil
 }
 
-func handleAudio(input string, audioFmt string, compress string, duration float64) (*fileReport, error) {
+func handleAudio(input string, audioFmt string, compress string, info mediaInfo) (*fileReport, error) {
 	if audioFmt == "" {
 		audioFmt = "mp3"
 	}
@@ -338,7 +449,7 @@ func handleAudio(input string, audioFmt string, compress string, duration float6
 	out := outputFileName(input, "audio", audioFmt, "", "", level)
 	args = append(args, out)
 
-	took, err := runFFmpegWithDuration("compressing", duration, args...)
+	took, err := runFFmpegWithDuration("compressing", info.duration, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
@@ -426,7 +537,7 @@ func finishJob(input, out string, took time.Duration, operation string) *fileRep
 
 // handleAudioFromVideo extracts the audio track of a video into its own
 // file, e.g. "shrink clip.mp4 mp3".
-func handleAudioFromVideo(input string, audioFmt string, compress string, duration float64) (*fileReport, error) {
+func handleAudioFromVideo(input string, audioFmt string, compress string, info mediaInfo) (*fileReport, error) {
 	level := compress
 	if compress == "" {
 		compress = "compress"
@@ -447,7 +558,7 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, durati
 	out := outputFileName(input, "audio", audioFmt, "audio", "", level)
 	args = append(args, out)
 
-	took, err := runFFmpegWithDuration("extracting audio", duration, args...)
+	took, err := runFFmpegWithDuration("extracting audio", info.duration, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
@@ -456,7 +567,7 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, durati
 
 // handleVideoToImage grabs a single frame from a video, e.g.
 // "shrink clip.mp4 png". Resolution target scales the grabbed frame.
-func handleVideoToImage(input string, resolution string, imageFmt string, compress string, duration float64) (*fileReport, error) {
+func handleVideoToImage(input string, resolution string, imageFmt string, compress string, info mediaInfo) (*fileReport, error) {
 	level := compress
 	if compress == "" {
 		compress = "compress"
@@ -473,7 +584,7 @@ func handleVideoToImage(input string, resolution string, imageFmt string, compre
 	out := outputFileName(input, "image", imageFmt, "frame", resolution, level)
 	args = append(args, "-frames:v", "1", "-update", "1", out)
 
-	took, err := runFFmpegWithDuration("grabbing frame", duration, args...)
+	took, err := runFFmpegWithDuration("grabbing frame", info.duration, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}

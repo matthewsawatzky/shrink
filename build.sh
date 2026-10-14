@@ -21,15 +21,19 @@ rm -rf dist
 mkdir -p dist
 
 # CGO disabled so every binary is fully static and portable
-for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
 	os=${platform%/*}
 	arch=${platform#*/}
+	bin=shrink
+	if [ "$os" = "windows" ]; then
+		bin=shrink.exe
+	fi
 	echo "building shrink-$VERSION-$os-$arch"
 	CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
 		go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
-		-o "dist/shrink-$VERSION-$os-$arch/shrink" .
+		-o "dist/shrink-$VERSION-$os-$arch/$bin" .
 	tar -czf "dist/shrink-$VERSION-$os-$arch.tar.gz" \
-		-C "dist/shrink-$VERSION-$os-$arch" shrink
+		-C "dist/shrink-$VERSION-$os-$arch" "$bin"
 	rm -rf "dist/shrink-$VERSION-$os-$arch"
 done
 
