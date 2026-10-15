@@ -26,6 +26,11 @@ var dryRun bool
 // exist (replacing them) instead of skipping or bumping a counter.
 var overwrite bool
 
+// deleteAfter enables -d/--delete: remove the original once a smaller
+// replacement of the same kind exists. Derived files (audio tracks,
+// frame grabs) never trigger deletion.
+var deleteAfter bool
+
 // levelSpec holds the encoder settings one compression level maps to.
 type levelSpec struct {
 	videoCRF     string // libx264 CRF
@@ -136,6 +141,7 @@ func usage() {
 		{"-f, --fast", "prefer hardware video encoders where available"},
 		{"-n, --dry-run", "show what would happen without encoding anything"},
 		{"-o, --overwrite", "redo outputs that already exist"},
+		{"-d, --delete", "delete the original once a smaller output exists"},
 		{"-m, --machine", "emit JSON instead of human output (for scripts/LLMs)"},
 		{"-c, --completions", "print shell completions (zsh or bash) and exit"},
 		{"-V, --version", "print the version and exit"},
@@ -334,6 +340,43 @@ type options struct {
 	audioFmt, compress string
 }
 
+// resHeight returns the pixel height a resolution target caps at.
+func resHeight(name string) int {
+	if name == "4k" {
+		return 2160
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(name, "p"))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// targetVideoCodec names the codec a video format target produces, so
+// already-compressed inputs can be matched by codec rather than by
+// container guesswork.
+func targetVideoCodec(videoFmt string) string {
+	switch videoFmt {
+	case "hevc":
+		return "hevc"
+	case "av1":
+		return "av1"
+	case "webm":
+		return "vp9"
+	}
+	return "h264" // mp4, mkv, mov, avi
+}
+
+// noopReport explains that an input already satisfies the request, so
+// no encoding is needed.
+func noopReport(input string) *fileReport {
+	return &fileReport{
+		input:    input,
+		noop:     true,
+		noopNote: filepath.Base(input) + " is already a compressed file that fits this request - nothing to do (pass a level to squeeze further, or -o to redo)",
+	}
+}
+
 // processOne runs a single compression job and returns its report.
 // All failures come back as errors so batch runs can continue.
 func processOne(input string, o options) (*fileReport, error) {
@@ -356,6 +399,35 @@ func processOne(input string, o options) (*fileReport, error) {
 	if err := checkKindTargets(kind, o); err != nil {
 		return nil, err
 	}
+
+	// One of shrink's own outputs fed back in (detected by name) needs
+	// no second compression pass: without an explicit level, a request
+	// the file already satisfies is a no-op, and a resolution target that
+	// still downscales re-encodes at a near-lossless grade.
+	if looksConverted(input) && o.compress == "" && !overwrite {
+		switch kind {
+		case "video":
+			if o.audioFmt == "" && o.imageFmt == "" &&
+				targetVideoCodec(coalesce(o.videoFmt, "mp4")) == info.videoCodec {
+				if o.resolution == "" || info.height <= resHeight(o.resolution) {
+					return noopReport(input), nil
+				}
+				return handleRescaleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), info)
+			}
+		case "image":
+			if img, ok := imageFormats[coalesce(o.imageFmt, "jpeg")]; ok && img.codec == info.videoCodec {
+				if o.resolution == "" || info.height <= resHeight(o.resolution) {
+					return noopReport(input), nil
+				}
+				return handleRescaleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"))
+			}
+		case "audio":
+			if af := audioFormats[coalesce(o.audioFmt, "mp3")]; af.codec == info.audioCodec {
+				return noopReport(input), nil
+			}
+		}
+	}
+
 	switch kind {
 	case "video":
 		switch {
@@ -397,6 +469,8 @@ func main() {
 			dryRun = true
 		case "-o", "--overwrite":
 			overwrite = true
+		case "-d", "--delete":
+			deleteAfter = true
 		case "-V", "--version":
 			fmt.Println("shrink " + version)
 			os.Exit(0)
@@ -497,13 +571,23 @@ func main() {
 	}
 
 	start := time.Now()
-	if _, err := processOne(input, o); err != nil {
+	rep, err := processOne(input, o)
+	if err != nil {
 		if machine {
 			exitMachineError(machineError{Error: err.Error(), Input: input})
 		}
 		fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(err.Error()))
 		printStepsFor(input)
 		os.Exit(1)
+	}
+	if rep.noop {
+		if machine {
+			machineNote = rep.noopNote
+			emitMachineOutput("", false, nil, time.Since(start), -1)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "%s %s\n", doneMark(), ui.dim(rep.noopNote))
+		return
 	}
 	if machine {
 		emitMachineOutput("", false, nil, time.Since(start), -1)

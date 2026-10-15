@@ -105,14 +105,17 @@ func fileExists(path string) bool {
 // mediaInfo describes everything shrink needs to know about an input
 // before encoding: whether ffmpeg can actually read it, its duration in
 // seconds (0 when absent, e.g. images), its bitrate (drives -f's
-// hardware rate), and whether it has an audio track. One ffprobe call
-// collects it all.
+// hardware rate), its dimensions, and the codecs inside it. One ffprobe
+// call collects it all.
 type mediaInfo struct {
-	ok       bool
-	hasAudio bool
-	hasVideo bool
-	duration float64
-	bitRate  int64 // bits per second; 0 when unknown
+	ok         bool
+	hasAudio   bool
+	hasVideo   bool
+	duration   float64
+	bitRate    int64  // bits per second; 0 when unknown
+	height     int    // tallest video/image stream; 0 when unknown
+	videoCodec string // e.g. h264, hevc, mjpeg
+	audioCodec string // e.g. aac, mp3
 }
 
 // probeFile gathers input metadata via a single ffprobe invocation
@@ -121,7 +124,7 @@ type mediaInfo struct {
 // reports ok=false.
 func probeFile(path string) mediaInfo {
 	cmd := exec.Command("ffprobe", "-v", "error", "-show_entries",
-		"format=duration,bit_rate:stream=codec_type",
+		"format=duration,bit_rate:stream=codec_type,codec_name,height",
 		"-of", "json", path)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -136,6 +139,8 @@ func probeFile(path string) mediaInfo {
 		}
 		Streams []struct {
 			CodecType string `json:"codec_type"`
+			CodecName string `json:"codec_name"`
+			Height    int    `json:"height"`
 		}
 	}
 	if json.Unmarshal(out, &probe) != nil {
@@ -146,8 +151,13 @@ func probeFile(path string) mediaInfo {
 		switch s.CodecType {
 		case "audio":
 			info.hasAudio = true
+			info.audioCodec = s.CodecName
 		case "video":
 			info.hasVideo = true
+			info.videoCodec = s.CodecName
+			if s.Height > info.height {
+				info.height = s.Height
+			}
 		}
 	}
 	if d, err := strconv.ParseFloat(strings.TrimSpace(probe.Format.Duration), 64); err == nil {
@@ -468,6 +478,10 @@ type fileReport struct {
 	outBytes  int64
 	statOK    bool // output file could be stat'ed
 	warning   string
+	noop      bool // nothing to do: the input already fits the request
+	noopNote  string
+	deleted   bool // -d removed the original
+	delNote   string
 }
 
 // print reports a finished job in human mode: the done line, any size
@@ -489,6 +503,11 @@ func (r *fileReport) print() {
 	}
 	if r.warning != "" {
 		fmt.Fprintf(os.Stderr, "%s %s %s\n", ui.yellow("!"), ui.yellow("warning:"), r.warning)
+	}
+	if r.deleted {
+		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("deleted original "+filepath.Base(r.input)))
+	} else if r.delNote != "" {
+		fmt.Fprintf(os.Stderr, "%s %s\n", ui.yellow("!"), ui.yellow(r.delNote))
 	}
 	printStepsFor(r.input)
 }
@@ -514,11 +533,32 @@ func finishJob(input, out string, took time.Duration, operation string) *fileRep
 	}
 	r.warning = sizeWarning(input, out)
 
+	// -d: remove the original once a smaller replacement exists. Derived
+	// outputs (audio tracks, frame grabs) never qualify, and neither does
+	// an "output" that didn't actually shrink.
+	if deleteAfter {
+		switch {
+		case operation != "compress" && operation != "rescale":
+			r.delNote = "kept the original: this run made a derived file, not a compressed version"
+		case !r.statOK:
+			r.delNote = "kept the original: the output could not be verified"
+		case r.outBytes >= r.inBytes:
+			r.delNote = "kept the original: the output is not smaller"
+		default:
+			if err := os.Remove(input); err != nil {
+				r.delNote = fmt.Sprintf("could not delete the original: %v", err)
+			} else {
+				r.deleted = true
+			}
+		}
+	}
+
 	if machine {
 		f := machineFile{
 			Input: r.input, Output: r.out, Kind: r.kind, Operation: r.operation,
 			InputBytes: r.inBytes, OutputBytes: r.outBytes,
 			TookMS: r.took.Milliseconds(), Warning: r.warning, Steps: machineStepsFor(r.input),
+			DeletedInput: r.deleted,
 		}
 		if r.inBytes > 0 {
 			f.SavingsPercent = round2((1 - float64(r.outBytes)/float64(r.inBytes)) * 100)
@@ -589,4 +629,67 @@ func handleVideoToImage(input string, resolution string, imageFmt string, compre
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
 	return finishJob(input, out, took, "grab_frame"), nil
+}
+
+// transparentCRF is the near-lossless grade used when the only real work
+// is rescaling one of shrink's own outputs: compressing an already
+// compressed file again would stack losses for no gain.
+func transparentCRF(codec string) string {
+	switch codec {
+	case "libx265":
+		return "22"
+	case "libsvtav1":
+		return "30"
+	case "libvpx-vp9":
+		return "28"
+	}
+	return "18" // libx264 and anything unknown
+}
+
+// handleRescaleVideo downscales one of shrink's own outputs without
+// stacking another compression pass on it: the rescale encodes at a
+// near-lossless grade, and an AAC track is simply copied.
+func handleRescaleVideo(input string, resolution string, videoFmt string, info mediaInfo) (*fileReport, error) {
+	vf := videoFormats[videoFmt]
+
+	args := []string{"-i", input, "-c:v", vf.codec, "-crf", transparentCRF(vf.codec)}
+	args = append(args, vf.args...)
+	args = append(args, "-vf", resolutions[resolution])
+
+	switch {
+	case info.audioCodec == "aac" && videoFmt != "webm":
+		args = append(args, "-c:a", "copy")
+	case videoFmt != "webm":
+		args = append(args, "-c:a", "aac", "-b:a", compressionLevels["compress"].audioBitrate)
+	default:
+		args = append(args, "-c:a", "libopus", "-b:a", compressionLevels["compress"].audioBitrate)
+	}
+
+	out := outputFileName(input, "video", videoFmt, "", resolution, "")
+	args = append(args, out)
+
+	took, err := runFFmpegWithDuration("downscaling", info.duration, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
+	}
+	return finishJob(input, out, took, "rescale"), nil
+}
+
+// handleRescaleImage downscales an already-compressed image at a
+// near-lossless quality instead of compressing it twice.
+func handleRescaleImage(input string, resolution string, imageFmt string) (*fileReport, error) {
+	img := imageFormats[imageFmt]
+
+	args := []string{"-i", input}
+	args = append(args, "-vf", resolutions[resolution])
+	args = append(args, imageCodecArgs(img.codec, "2", "95")...)
+
+	out := outputFileName(input, "image", imageFmt, "", resolution, "")
+	args = append(args, "-frames:v", "1", out)
+
+	took, err := runFFmpeg("downscaling", args...)
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg failed: %v", err)
+	}
+	return finishJob(input, out, took, "rescale"), nil
 }

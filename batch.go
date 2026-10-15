@@ -135,6 +135,19 @@ func looksConverted(path string) bool {
 	return false
 }
 
+// worthRevisit reports whether a converted-looking file deserves another
+// pass: an explicit level squeezes it further, or a resolution target
+// would genuinely downscale it.
+func worthRevisit(f string, o options) bool {
+	if o.compress != "" {
+		return true
+	}
+	if o.resolution == "" {
+		return false
+	}
+	return probeFile(f).height > resHeight(o.resolution)
+}
+
 // wouldProduce names the output a run would make for f, mirroring
 // processOne's routing, without encoding or bumping collision counters.
 // o must already be narrowed to f's kind (see perKindOpts).
@@ -195,10 +208,16 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 			continue
 		}
 		fileOpts := perKindOpts(kind, o)
-		// an output from an earlier run - or a file that already looks
-		// like one - means there is nothing to do
 		out := wouldProduce(f, kind, fileOpts)
-		if !overwrite && (fileExists(out) || looksConverted(f)) {
+		// an output from an earlier run means there is nothing to do
+		if !overwrite && fileExists(out) {
+			alreadyDone++
+			continue
+		}
+		// so does a file that already looks like one of our outputs -
+		// unless this run would genuinely rescale it, or a level
+		// explicitly squeezes it further
+		if !overwrite && looksConverted(f) && !worthRevisit(f, o) {
 			alreadyDone++
 			continue
 		}
@@ -275,11 +294,16 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 		fmt.Fprint(os.Stderr, "\033[?25h")
 	}
 
-	var processed, failed int
+	var processed, failed, deleted int
 	var inTotal, outTotal int64
 	var failures []machineFailure
 	for i := range work {
 		r := results[i]
+		if r.rep != nil && r.rep.noop {
+			// defensive: the worklist normally filters these out
+			alreadyDone++
+			continue
+		}
 		if r.err != nil {
 			failed++
 			msg := failMsg(work[i].path, r.err)
@@ -293,6 +317,9 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 		if r.rep.statOK {
 			inTotal += r.rep.inBytes
 			outTotal += r.rep.outBytes
+		}
+		if r.rep.deleted {
+			deleted++
 		}
 		if !machine && parallel {
 			r.rep.print() // held back during the run; report in input order
@@ -323,6 +350,9 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 	}
 
 	printBatchSummary(processed, failed, skipped, inTotal, outTotal, time.Since(start))
+	if deleted > 0 {
+		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d originals deleted", deleted)))
+	}
 	if alreadyDone > 0 {
 		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
 			alreadyDone, filesWord(alreadyDone))))
@@ -348,6 +378,9 @@ func reportDryRun(dir string, recursive bool, work []batchWork, skipped map[stri
 		fmt.Fprintf(os.Stderr, "would compress %s -> %s\n", ui.cyan(w.path), ui.bold(w.out))
 	}
 	fmt.Fprintf(os.Stderr, "%s dry run: %d %s, nothing written\n", doneMark(), len(work), filesWord(len(work)))
+	if deleteAfter {
+		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("originals will be deleted after each successful compression"))
+	}
 	if alreadyDone > 0 {
 		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
 			alreadyDone, filesWord(alreadyDone))))

@@ -23,6 +23,8 @@ Shrink supports:
 - Changing the resolution on videos and images (scaling = lossy; smaller inputs are never upscaled)
 - Compressing or standardizing all media inside a folder (recursive with "-r", parallel with "-j", dry-run preview with "-n")
 - Incremental folder runs: files that were already converted are skipped, so re-running never double-compresses ("-o" redoes them)
+- Already-compressed inputs fed back in are a no-op when nothing is needed, and a resolution target rescales them at near-lossless quality instead of compressing twice
+- Optional deletion of originals once their compressed replacement exists ("-d" flag)
 - Better* 3rd party CLI support and Agent handling when using machine options ("-m" flag)
 
 ## Requirements:
@@ -87,6 +89,7 @@ In folder mode, give one format per media kind (e.g. `shrink folder ~/Media jpeg
 | `-f`, `--fast` | prefer hardware video encoders where available |
 | `-n`, `--dry-run` | show what would happen without encoding anything |
 | `-o`, `--overwrite` | redo outputs that already exist |
+| `-d`, `--delete` | delete the original once a smaller output exists (same-kind targets only) |
 | `-c`, `--completions` | print shell completions (zsh or bash) and exit |
 | `-V`, `--version` | print the version and exit |
 

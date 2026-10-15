@@ -23,6 +23,7 @@ func completionWords() []string {
 		"-f", "--fast",
 		"-n", "--dry-run",
 		"-o", "--overwrite",
+		"-d", "--delete",
 		"-m", "--machine",
 		"-c", "--completions",
 		"-V", "--version",

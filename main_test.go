@@ -82,3 +82,44 @@ func TestVideoCRF(t *testing.T) {
 		}
 	}
 }
+
+func TestResHeight(t *testing.T) {
+	cases := []struct {
+		name string
+		want int
+	}{
+		{"340p", 340},
+		{"480p", 480},
+		{"720p", 720},
+		{"1080p", 1080},
+		{"1440p", 1440},
+		{"4k", 2160},
+		{"bogus", 0},
+		{"", 0},
+	}
+	for _, c := range cases {
+		if got := resHeight(c.name); got != c.want {
+			t.Errorf("resHeight(%q) = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestTargetVideoCodec(t *testing.T) {
+	cases := []struct {
+		videoFmt string
+		want     string
+	}{
+		{"mp4", "h264"},
+		{"mkv", "h264"},
+		{"mov", "h264"},
+		{"avi", "h264"},
+		{"hevc", "hevc"},
+		{"av1", "av1"},
+		{"webm", "vp9"},
+	}
+	for _, c := range cases {
+		if got := targetVideoCodec(c.videoFmt); got != c.want {
+			t.Errorf("targetVideoCodec(%q) = %q, want %q", c.videoFmt, got, c.want)
+		}
+	}
+}

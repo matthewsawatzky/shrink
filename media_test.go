@@ -120,6 +120,21 @@ func TestBitrateForLevel(t *testing.T) {
 	}
 }
 
+func TestTransparentCRF(t *testing.T) {
+	cases := []struct{ codec, want string }{
+		{"libx264", "18"},
+		{"libx265", "22"},
+		{"libsvtav1", "30"},
+		{"libvpx-vp9", "28"},
+		{"something-else", "18"},
+	}
+	for _, c := range cases {
+		if got := transparentCRF(c.codec); got != c.want {
+			t.Errorf("transparentCRF(%q) = %q, want %q", c.codec, got, c.want)
+		}
+	}
+}
+
 func TestParseMissingEncoder(t *testing.T) {
 	msg := "[vost#0:0] Unknown encoder 'libvorbis'\nmore noise\n"
 	if got := parseMissingEncoder(msg); got != "libvorbis" {

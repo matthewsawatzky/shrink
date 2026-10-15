@@ -29,6 +29,7 @@ type machineFile struct {
 	SavingsPercent float64       `json:"savings_percent"`
 	TookMS         int64         `json:"took_ms"`
 	Warning        string        `json:"warning,omitempty"`
+	DeletedInput   bool          `json:"deleted_input,omitempty"`
 	Steps          []machineStep `json:"steps,omitempty"`
 }
 
@@ -41,6 +42,7 @@ type machineSummary struct {
 	Processed      int     `json:"processed"`
 	Failed         int     `json:"failed"`
 	Skipped        int     `json:"skipped"`
+	Deleted        int     `json:"deleted,omitempty"`
 	InputBytes     int64   `json:"input_bytes"`
 	OutputBytes    int64   `json:"output_bytes"`
 	SavingsPercent float64 `json:"savings_percent"`
@@ -52,6 +54,7 @@ type machineSummary struct {
 type machineOutput struct {
 	Version     string           `json:"version,omitempty"`
 	DryRun      bool             `json:"dry_run,omitempty"`
+	Note        string           `json:"note,omitempty"`
 	Folder      string           `json:"folder,omitempty"`
 	Recursive   bool             `json:"recursive,omitempty"`
 	Files       []machineFile    `json:"files"`
@@ -82,6 +85,10 @@ var machineSkipped = map[string]int{}
 // machineDryRun marks the document as a -n preview: entries are what
 // would happen, nothing was encoded.
 var machineDryRun bool
+
+// machineNote carries an optional human-readable note on the document,
+// e.g. why a run did nothing.
+var machineNote string
 
 // machineAlreadyDone counts files skipped because their output already
 // existed (re-run with -o to redo them).
@@ -118,12 +125,17 @@ func emitMachineOutput(folder string, recursive bool, failures []machineFailure,
 		TookMS:    elapsed.Milliseconds(),
 	}
 	var inTotal, outTotal int64
+	var deleted int
 	for _, f := range files {
 		inTotal += f.InputBytes
 		outTotal += f.OutputBytes
+		if f.DeletedInput {
+			deleted++
+		}
 	}
 	sum.InputBytes = inTotal
 	sum.OutputBytes = outTotal
+	sum.Deleted = deleted
 	if inTotal > 0 {
 		sum.SavingsPercent = round2((1 - float64(outTotal)/float64(inTotal)) * 100)
 	}
@@ -135,6 +147,7 @@ func emitMachineOutput(folder string, recursive bool, failures []machineFailure,
 	out := machineOutput{
 		Version:     version,
 		DryRun:      machineDryRun,
+		Note:        machineNote,
 		Folder:      folder,
 		Recursive:   recursive,
 		Files:       files,
