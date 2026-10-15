@@ -16,6 +16,7 @@ func completionWords() []string {
 	words = append(words, sortedKeys(imageFormats)...)
 	words = append(words, sortedKeys(audioFormats)...)
 	words = append(words, sortedKeys(compressionLevels)...)
+	words = append(words, "folder", "doctor")
 	words = append(words,
 		"-v", "--verbose",
 		"-r", "--recursive",

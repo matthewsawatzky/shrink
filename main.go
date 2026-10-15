@@ -121,7 +121,8 @@ func usage() {
 	out := os.Stderr
 	fmt.Fprintf(out, "%s %s\n\n", ui.bold("shrink"), ui.dim("- compress images, video and audio with ffmpeg"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("usage: shrink <input> [target...]"))
-	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink folder <folder> [format...] [level]"))
+	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink folder <folder> [format...] [level]"))
+	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink doctor   # check ffmpeg and encoder availability"))
 	fmt.Fprintf(out, "%s\n", ui.dim("  folder mode converts every matching file in place. Give one format per"))
 	fmt.Fprintf(out, "%s\n\n", ui.dim("  media kind (e.g. \"jpeg mp4 mp3\"); levels apply to all media. Add -r for subfolders."))
 	fmt.Fprintf(out, "%s\n", ui.bold("targets:"))
@@ -499,6 +500,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// "doctor" checks the install: ffmpeg, ffprobe and every encoder
+	if len(positional) > 0 && positional[0] == "doctor" {
+		if len(positional) > 1 {
+			exitError("doctor takes no arguments - just: shrink doctor")
+		}
+		runDoctor()
+	}
+
 	// "folder" opens explicit folder mode: the next argument is the folder,
 	// and separate format targets per media kind are allowed.
 	folderKeyword := false
@@ -531,6 +540,9 @@ func main() {
 			unknownTargetError(a)
 		}
 	}
+
+	// every remaining path probes or encodes, so the tools must exist
+	requireDeps()
 
 	if folderKeyword && !info.IsDir() {
 		exitError("folder mode needs a folder, but %s is a file", input)

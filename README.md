@@ -66,6 +66,7 @@ The installers notice when ffmpeg is missing and offer to install it for you (vi
 ```bash
 shrink <input> [target ...]          # one file
 shrink folder <folder> [target ...]  # every matching file in a folder
+shrink doctor                        # check ffmpeg and encoder availability
 ```
 
 Targets can be given in any order, and flags can appear anywhere:
@@ -79,7 +80,11 @@ shrink song.wav flac               # lossless conversion (level ignored)
 shrink folder ~/Media jpeg mp4 mp3 spacesaver
 ```
 
-With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) and compresses at the `compress` level.
+With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) and compresses at the `compress` level. Running without ffmpeg on PATH fails fast with the right install hint for your platform instead of a confusing encode error.
+
+### Doctor
+
+`shrink doctor` prints a checklist of everything shrink depends on: ffmpeg/ffprobe, every encoder behind each target (a stripped-down ffmpeg build shows which targets are unavailable, e.g. `webp` needs `libwebp`), and hardware (`-f`) support. Exits 0 when the core tools are present, 1 when they are not; `-m` emits the same report as JSON.
 
 ### Targets
 
