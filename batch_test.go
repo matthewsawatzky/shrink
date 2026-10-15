@@ -113,6 +113,21 @@ func TestLooksConverted(t *testing.T) {
 	}
 }
 
+func TestWorthRevisit(t *testing.T) {
+	// an explicit level always squeezes, whatever the file is called:
+	// name detection must never override a direct user request
+	if !worthRevisit("whatever.mp4", options{compress: "compress"}) {
+		t.Error("an explicit level should always revisit a converted-looking file")
+	}
+	if !worthRevisit("whatever.mp4", options{compress: "neversee"}) {
+		t.Error("an explicit level should always revisit a converted-looking file")
+	}
+	// no level and no resolution: nothing this run would change
+	if worthRevisit("whatever.mp4", options{}) {
+		t.Error("no level and no resolution should not revisit")
+	}
+}
+
 func TestFindAndCountMediaFiles(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel string) {
