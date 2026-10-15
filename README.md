@@ -46,11 +46,11 @@ Go:
 ```bash
 go install github.com/matthewsawatzky/shrink@latest
 ```
-Windows (10+, amd64/arm64):
+Windows (10+, amd64/arm64) - **not yet tested on a real Windows machine**; builds are cross-compiled and should work, but treat them as experimental and open an issue if anything breaks:
 ```powershell
 irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | iex
 ```
-Or grab a binary from the [releases page](https://github.com/matthewsawatzky/shrink/releases) and put it on your PATH.
+Or grab a binary from the [releases page](https://github.com/matthewsawatzky/shrink/releases) and put it on your PATH. macOS and Linux are the tested platforms.
 
 ## CLI:
 
