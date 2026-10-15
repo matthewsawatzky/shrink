@@ -1,115 +1,177 @@
-# Shrink - a media shrinking tool
-`We are like a dwarf perched on the shoulders of a giant` ~ William of Conches
+# shrink
+
+**Media compression and conversion with one short command.**
+A friendly wrapper around [ffmpeg](https://ffmpeg.org): sane defaults, three compression levels, modern codecs, and a folder mode for whole libraries.
 
 [![CI](https://github.com/matthewsawatzky/shrink/actions/workflows/ci.yml/badge.svg)](https://github.com/matthewsawatzky/shrink/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/matthewsawatzky/shrink?logo=github)](https://github.com/matthewsawatzky/shrink/releases)
 [![license](https://img.shields.io/github/license/matthewsawatzky/shrink)](LICENSE)
 [![Go](https://img.shields.io/github/go-version/go/matthewsawatzky/shrink?logo=go)](go.mod)
 
-> ffmpeg is the background tool, thank you FFmpeg Devs
+## Quick start
 
+```bash
+shrink clip.mov 1080p mp4          # scale to 1080p and convert
+shrink photo.heic webp spacesaver  # convert and compress hard
+shrink song.wav mp3                # convert audio
+shrink folder ~/Media -r           # compress a whole folder tree
+```
 
+```console
+$ shrink clip.mov 1080p mp4
+✓ clip-1080p.mp4  (412.51MB → 38.12MB)  ↓ 90%  took 42s
+```
 
-## About:
-'Shrink' is a CLI tool that allows for easier media conversion and compression: short commands to encode and manipulate media, whether that be Videos, Images, or Audio.
+Outputs are written next to the input, and your originals are never touched (unless you ask for it with `-d`).
 
-Shrink relies on FFmpeg in the background to do the compression and encoding, and can only do what FFmpeg can do.
+## Requirements
 
-Shrink supports:
-- Compressing video, image, and audio files with three preset levels (compress, spacesaver, neversee)
-- Modern codecs: hevc and av1 targets (much smaller files at the same quality), and hardware encoders with "-f" (VideoToolbox on macOS - much faster)
-- Turning videos (with audio) into audio files
-- Grabbing a frame from a video as an image
-- Changing the resolution on videos and images (scaling = lossy; smaller inputs are never upscaled)
-- Compressing or standardizing all media inside a folder (recursive with "-r", parallel with "-j", dry-run preview with "-n")
-- Incremental folder runs: files that were already converted are skipped, so re-running never double-compresses ("-o" redoes them)
-- Already-compressed inputs fed back in are a no-op when nothing is needed, and a resolution target rescales them at near-lossless quality instead of compressing twice
-- Optional deletion of originals once their compressed replacement exists ("-d" flag)
-- Better* 3rd party CLI support and Agent handling when using machine options ("-m" flag)
+- `ffmpeg` and `ffprobe` on your `PATH`
+- A full ffmpeg build — stripped-down builds are missing encoders like webp and vorbis (`brew install ffmpeg` gets everything)
 
-## Requirements:
-- ffmpeg and ffprobe on your PATH
-- A full FFmpeg build for every output format - stripped-down builds are missing encoders like webp and vorbis (`brew install ffmpeg` gets everything)
+## Install
 
-## Install:
-macOS / Linux (arm64 + amd64):
+**macOS / Linux** (arm64 + amd64):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.sh | sh
 ```
-Homebrew:
+
+**Homebrew:**
+
 ```bash
 brew tap matthewsawatzky/tap
 brew trust matthewsawatzky/tap    # required once by modern Homebrew
 brew install shrink
 ```
-Go:
+
+**Go:**
+
 ```bash
 go install github.com/matthewsawatzky/shrink@latest
 ```
-Windows (10+, amd64/arm64) - **not yet tested on a real Windows machine**; builds are cross-compiled and should work, but treat them as experimental and open an issue if anything breaks:
+
+**Windows 10+** (amd64/arm64) — *experimental: builds are cross-compiled and not yet tested on real hardware; please [open an issue](https://github.com/matthewsawatzky/shrink/issues) if anything breaks.*
+
 ```powershell
 irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | iex
 ```
-Or grab a binary from the [releases page](https://github.com/matthewsawatzky/shrink/releases) and put it on your PATH. macOS and Linux are the tested platforms.
 
-## CLI:
+Every release is also available as a plain binary on the [releases page](https://github.com/matthewsawatzky/shrink/releases). macOS and Linux are the tested platforms.
 
-Usage:
+## Usage
+
 ```bash
-shrink <input> [targets...]                      # one file
-shrink folder <folder> [formats...] [level]      # every file in a folder
+shrink <input> [target ...]          # one file
+shrink folder <folder> [target ...]  # every matching file in a folder
 ```
-Targets can be given in any order; flags can appear anywhere.
 
-Example:
+Targets can be given in any order, and flags can appear anywhere:
+
 ```bash
-$ shrink input.MOV 1080p mp4
--> input-1080p.mp4
+shrink clip.mov 1080p mp4          # scale to 1080p and convert to mp4
+shrink clip.mp4 mp3                # extract the audio track
+shrink clip.mp4 png                # grab the first frame as an image
+shrink photo.heic jpeg spacesaver  # convert and compress heavily
+shrink song.wav flac               # lossless conversion (level ignored)
+shrink folder ~/Media jpeg mp4 mp3 spacesaver
 ```
-Outputs are written next to the input, and existing files are never overwritten (a counter is appended instead).
 
-### Targets:
-| Types | Options |
-|-------|---------|
-| `<resolution>` | 340p, 480p, 720p, 1080p, 1440p, 4k |
-| `<video format>` | mp4, mkv, webm, mov, avi, hevc, av1 |
-| `<image format>` | jpeg, png, webp, gif |
-| `<audio format>` | mp3, aac, m4a, opus, ogg, wav, flac |
-| `<compression level>` | compress, spacesaver, neversee |
+With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) and compresses at the `compress` level.
 
-In folder mode, give one format per media kind (e.g. `shrink folder ~/Media jpeg mp4 mp3 spacesaver`); each applies to its matching files only.
+### Targets
 
-### Flags:
-| Flags | Descriptions |
-|-------|--------------|
-| `-m`, `--machine` | outputs JSON (for scripts/LLMs) |
-| `-v`, `--verbose` | step timings, and ms and KB everywhere |
+| Type | Values |
+|------|--------|
+| Resolution | `340p` `480p` `720p` `1080p` `1440p` `4k` |
+| Video format | `mp4` `mkv` `webm` `mov` `avi` `hevc` `av1` |
+| Image format | `jpeg` (`jpg`) `png` `webp` `gif` |
+| Audio format | `mp3` `aac` (`m4a`) `opus` `ogg` `wav` `flac` |
+| Compression level | `compress` `spacesaver` `neversee` |
+
+- `hevc` and `av1` outputs are written into `.mp4` containers; `aac` is written as `.m4a`.
+- Resolution targets only ever downscale: an input smaller than the target keeps its size.
+- `wav` and `flac` are lossless, so they ignore the compression level.
+
+### Compression levels
+
+| Level | Result |
+|-------|--------|
+| `compress` | decent quality, solid savings (the default) |
+| `spacesaver` | noticeably compressed |
+| `neversee` | very compressed |
+
+### Output naming
+
+Outputs are written next to the input, and existing files are never overwritten (a `-1` counter is appended on collision). The name records what was done:
+
+| Command | Output |
+|---------|--------|
+| `shrink clip.mov 1080p mp4` | `clip-1080p.mp4` |
+| `shrink clip.mov mp4` | `clip-compressed.mp4` |
+| `shrink clip.mp4 mp3` | `clip-audio.mp3` |
+| `shrink clip.mp4 png` | `clip-frame.png` |
+| `shrink pic.jpg spacesaver` | `pic-spacesaver.jpg` |
+
+### Folder mode
+
+`shrink folder <folder>` compresses every supported file in the folder, in place:
+
+- Give one format per media kind (e.g. `jpeg mp4 mp3`); each applies only to matching files. With no formats, each kind uses its default.
+- `-r` walks subfolders too; hidden files and folders are always skipped.
+- `-j N` encodes N files at once (default `2`).
+- Re-running is safe: files whose output already exists, or that look like earlier shrink output, are skipped. `-o` redoes them.
+- `-n` shows exactly what a run would do, without writing anything.
+- `-d` deletes each original once a smaller replacement exists (compressed or rescaled same-kind outputs only).
+
+### Supported inputs
+
+| Kind | Extensions |
+|------|------------|
+| Video | `.mp4` `.mkv` `.webm` `.mov` `.avi` `.m4v` `.mpg` `.mpeg` `.flv` `.wmv` `.ts` |
+| Image | `.jpg` `.jpeg` `.png` `.webp` `.gif` `.bmp` `.tiff` `.heic` `.heif` `.avif` |
+| Audio | `.mp3` `.aac` `.m4a` `.opus` `.ogg` `.wav` `.flac` `.wma` `.aiff` |
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-m`, `--machine` | emit one JSON document on stdout instead of human output ([schema](docs/machine.md)) |
+| `-v`, `--verbose` | show per-step timings, and use ms and KB everywhere |
 | `-r`, `--recursive` | with a folder, also scan subfolders |
 | `-j`, `--jobs N` | folder mode: encode N files at once (default 2) |
-| `-f`, `--fast` | prefer hardware video encoders where available |
+| `-f`, `--fast` | prefer hardware video encoders where available (macOS VideoToolbox; x264/hevc targets only) |
 | `-n`, `--dry-run` | show what would happen without encoding anything |
 | `-o`, `--overwrite` | redo outputs that already exist |
-| `-d`, `--delete` | delete the original once a smaller output exists (same-kind targets only) |
-| `-c`, `--completions` | print shell completions (zsh or bash) and exit |
+| `-d`, `--delete` | delete the original once a smaller replacement exists (same-kind targets only) |
+| `-c`, `--completions SHELL` | print shell completions for `zsh` or `bash` and exit |
 | `-V`, `--version` | print the version and exit |
 
-### Shell completions:
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | success |
+| `1` | error — bad target, failed encode, no media found |
+| `130` | cancelled with Ctrl+C — partial files are cleaned up |
+
+### Shell completions
+
 ```bash
-shrink --completions zsh > ~/.zfunc/_shrink    # then "fpath=(~/.zfunc $fpath)" before compinit
+shrink --completions zsh  > ~/.zfunc/_shrink    # add "fpath=(~/.zfunc $fpath)" before compinit
 shrink --completions bash > /usr/local/etc/bash_completion.d/shrink
 ```
 
-### Exit codes:
-| Code | Meaning |
-|------|---------|
-| 0 | success |
-| 1 | error (bad target, failed encode, no media found) |
-| 130 | cancelled with Ctrl+C (partial files are cleaned up) |
+## Contributing
 
-*better than it could have been... idk what to say
+Building, testing, and releasing are covered in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Releasing (maintainer):
-```bash
-git tag v0.2.0 && git push --tags     # CI builds + publishes the release
-```
-GitHub Actions cross-builds every platform (macOS/Linux/Windows, arm64/amd64), attaches checksums and publishes the release - `install.sh` picks it up immediately. (`./release.sh v0.2.0 "notes"` does the same locally.)
+## Credits
+
+All encoding is done by [ffmpeg](https://ffmpeg.org) (and ffprobe) — shrink is just the friendly wrapper. Thank you, FFmpeg devs.
+
+> *"We are like a dwarf perched on the shoulders of a giant."* — William of Conches
+
+## License
+
+[MIT](LICENSE)
