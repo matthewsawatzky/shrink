@@ -59,6 +59,8 @@ irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | 
 
 Every release is also available as a plain binary on the [releases page](https://github.com/matthewsawatzky/shrink/releases). macOS and Linux are the tested platforms.
 
+The installers notice when ffmpeg is missing and offer to install it for you (via brew on macOS, apt/dnf/pacman/apk/zypper on Linux, winget on Windows — with a manual hint when run without a terminal, since `curl | sh` can't prompt).
+
 ## Usage
 
 ```bash

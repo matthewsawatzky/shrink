@@ -45,11 +45,29 @@ if ($userPath -notlike "*$dir*") {
     Write-Host "  [Environment]::SetEnvironmentVariable('Path', `"$userPath;$dir`", 'User')"
 }
 
-# --- shrink needs ffmpeg/ffprobe to work ---
-foreach ($dep in @("ffmpeg", "ffprobe")) {
-    if (-not (Get-Command $dep -ErrorAction SilentlyContinue)) {
-        Write-Host "shrink: warning: $dep not found - shrink needs it (winget install Gyan.FFmpeg)"
+# --- shrink needs ffmpeg (ffprobe ships with it); offer to install if missing ---
+if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+    if (-not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
+        Write-Host "shrink: warning: ffprobe not found - complete ffmpeg installs ship both; reinstall ffmpeg"
     }
+}
+elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+    $reply = Read-Host "shrink: ffmpeg is not installed. Install it now with 'winget install Gyan.FFmpeg'? [y/N]"
+    if ($reply -match '^[yY]') {
+        winget install --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements
+        if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+            Write-Host "shrink: ffmpeg installed - shrink is ready"
+        }
+        else {
+            Write-Host "shrink: warning: still no ffmpeg on PATH - open a new terminal and retry"
+        }
+    }
+    else {
+        Write-Host "shrink: note: shrink needs ffmpeg - install it yourself with: winget install Gyan.FFmpeg"
+    }
+}
+else {
+    Write-Host "shrink: warning: ffmpeg not found - shrink needs it (winget install Gyan.FFmpeg)"
 }
 
 & "$dir\shrink.exe" -V

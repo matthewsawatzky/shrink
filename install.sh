@@ -87,10 +87,79 @@ case ":$PATH:" in
 	;;
 esac
 
-# --- shrink needs ffmpeg/ffprobe to work ---
-for dep in ffmpeg ffprobe; do
-	command -v "$dep" >/dev/null 2>&1 ||
-		printf 'shrink: warning: %s not found - shrink needs it (brew install ffmpeg)\n' "$dep"
-done
+# --- shrink needs ffmpeg/ffprobe to work; offer to install if missing ---
+
+# ffmpeg_install_cmd prints the command that installs ffmpeg on this
+# platform, or nothing when no known package manager is present.
+ffmpeg_install_cmd() {
+	case "$os" in
+	darwin)
+		if command -v brew >/dev/null 2>&1; then
+			echo "brew install ffmpeg"
+		fi
+		;;
+	linux)
+		if command -v apt-get >/dev/null 2>&1; then
+			echo "sudo apt-get install -y ffmpeg"
+		elif command -v dnf >/dev/null 2>&1; then
+			echo "sudo dnf install -y ffmpeg"
+		elif command -v pacman >/dev/null 2>&1; then
+			echo "sudo pacman -S --noconfirm ffmpeg"
+		elif command -v apk >/dev/null 2>&1; then
+			echo "sudo apk add ffmpeg"
+		elif command -v zypper >/dev/null 2>&1; then
+			echo "sudo zypper install -y ffmpeg"
+		fi
+		;;
+	esac
+}
+
+# ensure_ffmpeg asks whether to install ffmpeg when it is missing and
+# runs the platform's package manager on yes. The prompt reads /dev/tty
+# so it still works when the script itself is piped in (curl | sh);
+# without a terminal it falls back to printing the hint.
+ensure_ffmpeg() {
+	if command -v ffmpeg >/dev/null 2>&1; then
+		if ! command -v ffprobe >/dev/null 2>&1; then
+			say "warning: ffprobe not found - complete ffmpeg installs ship both; reinstall ffmpeg"
+		fi
+		return
+	fi
+
+	cmd=$(ffmpeg_install_cmd)
+	if [ -z "$cmd" ]; then
+		say "warning: ffmpeg not found - shrink needs it (ffmpeg installs ship ffprobe too)"
+		say "  install it from https://ffmpeg.org/download.html"
+		if [ "$os" = "darwin" ]; then
+			say "  on macOS: install Homebrew (https://brew.sh), then: brew install ffmpeg"
+		fi
+		return
+	fi
+
+	answer=""
+	if [ -c /dev/tty ]; then
+		printf 'shrink: ffmpeg is not installed. Install it now with "%s"? [y/N] ' "$cmd"
+		read answer </dev/tty || answer=""
+	fi
+	case "$answer" in
+	y | Y | yes | Yes | YES)
+		say "running: $cmd"
+		if $cmd; then
+			if command -v ffmpeg >/dev/null 2>&1; then
+				say "ffmpeg installed - shrink is ready"
+			else
+				say "warning: still no ffmpeg on PATH - check the output above"
+			fi
+		else
+			say "warning: the install command failed - check the output above"
+		fi
+		;;
+	*)
+		say "note: shrink needs ffmpeg - install it yourself with: $cmd"
+		;;
+	esac
+}
+
+ensure_ffmpeg
 
 "$bindir/shrink" -V
