@@ -103,3 +103,37 @@ Errors for bad input (unknown target, unsupported file type, conflicting targets
 | `suggestions` | suggested commands, when one file was asked for two formats |
 
 Folder-mode failures keep the normal document shape: the run completes, failures land in `failed[]`, and the process exits `1` if any file failed.
+
+`shrink make -m` reports the generated file like a normal run, with `"input": "(generated)"` and `"operation": "make"`.
+
+## Other commands
+
+`shrink doctor -m` and `shrink update -m` emit their own documents instead of the run document.
+
+`shrink doctor -m` exits `1` when `ok` is `false` (ffmpeg or ffprobe missing). `encoders` covers every encoder a target depends on; `missing` lists the target groups that lack one:
+
+```json
+{
+  "version": "v0.6.0",
+  "platform": "darwin/arm64",
+  "ffmpeg": { "available": true, "version": "ffmpeg version 7.1 ..." },
+  "ffprobe": { "available": true, "version": "ffprobe version 7.1 ..." },
+  "encoders": {
+    "aac": true, "flac": true, "gif": true, "libmp3lame": true,
+    "libopus": true, "libsvtav1": true, "libvorbis": false,
+    "libvpx-vp9": true, "libwebp": false, "libx264": true,
+    "libx265": true, "mjpeg": true, "pcm_s16le": true, "png": true
+  },
+  "missing": ["webp", "ogg"],
+  "hardware": { "available": true, "note": "VideoToolbox - -f encodes on the GPU" },
+  "ok": true
+}
+```
+
+`shrink update -m` reports what happened (or would happen, with `-n`):
+
+```json
+{ "version": "v0.6.0", "updated": true, "updated_from": "v0.5.0", "updated_to": "v0.6.0" }
+```
+
+`updated` is always present: it stays `false` when already current or Homebrew-managed (a `note` then explains why), and a dry run sets `updated_to` while `updated` stays `false`.

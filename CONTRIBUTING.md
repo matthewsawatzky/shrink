@@ -36,11 +36,15 @@ go build ./...
 | `main.go` | CLI parsing, target tables (formats, resolutions, levels), routing |
 | `media.go` | ffprobe metadata, ffmpeg command lines, output naming |
 | `batch.go` | folder mode: scanning, worklist, parallel workers, summaries |
+| `doctor.go` | `shrink doctor`, fail-fast dependency check, install hints |
+| `make.go` | `shrink make`: test-media generation and its target vocabulary |
+| `update.go` | `shrink update`: release lookup, checksum verify, binary swap |
 | `machine.go` | the `-m` JSON document |
 | `progress.go` | live progress bar, shared batch line, Ctrl+C cleanup |
 | `style.go` | ANSI styling (auto-disabled for pipes, `NO_COLOR`, `TERM=dumb`) |
 | `verbose.go` | `-v` step timings |
 | `completions.go` | zsh/bash completion scripts |
+| `install.sh`, `install.ps1`, `uninstall.sh`, `uninstall.ps1` | installer/uninstaller scripts shipped with releases |
 
 The format/resolution/level tables in `main.go` drive parsing, completions, and error messages, so adding a target there wires it up everywhere.
 

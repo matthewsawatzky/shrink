@@ -29,6 +29,8 @@ Outputs are written next to the input, and your originals are never touched (unl
 - `ffmpeg` and `ffprobe` on your `PATH`
 - A full ffmpeg build — stripped-down builds are missing encoders like webp and vorbis (`brew install ffmpeg` gets everything)
 
+shrink checks for these up front: if ffmpeg is missing it fails immediately with the install command for your platform, and [`shrink doctor`](#doctor) shows what's installed, which targets are available, and whether hardware encoding works.
+
 ## Install
 
 **macOS / Linux** (arm64 + amd64):
@@ -59,15 +61,21 @@ irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | 
 
 Every release is also available as a plain binary on the [releases page](https://github.com/matthewsawatzky/shrink/releases). macOS and Linux are the tested platforms.
 
-**Update:**
+The installers also notice when ffmpeg is missing and offer to install it for you (brew, apt/dnf/pacman/apk/zypper, or winget), falling back to a printed hint when there's no terminal to prompt on.
 
-- curl-installed: `shrink update` — checks GitHub for the latest release, verifies its checksum, and swaps the binary in place; a no-op when already current. Homebrew-managed installs are detected and pointed at `brew upgrade shrink` instead, and Windows works the same way (`irm ... | iex` not needed).
-- Homebrew: `brew upgrade shrink`
-- Go: `go install github.com/matthewsawatzky/shrink@latest`
+### Updating
 
-The installers notice when ffmpeg is missing and offer to install it for you (via brew on macOS, apt/dnf/pacman/apk/zypper on Linux, winget on Windows — with a manual hint when run without a terminal, since `curl | sh` can't prompt).
+| Installed via | Update with |
+|---------------|-------------|
+| curl installer or manual binary | `shrink update` |
+| Homebrew | `brew upgrade shrink` |
+| Go | `go install github.com/matthewsawatzky/shrink@latest` |
 
-**Uninstall** removes the binary, the Homebrew package (if installed that way) and the shell completions — ffmpeg is left alone since other tools use it:
+`shrink update` checks GitHub for the latest release, verifies its SHA-256 checksum, and swaps the binary in place — a no-op when already current. Homebrew-managed installs are detected and pointed at `brew upgrade shrink` instead, and local dev builds require `-o` to be replaced.
+
+### Uninstalling
+
+The uninstaller removes the binary, the Homebrew package (if that's how it was installed), and the shell completions. ffmpeg is left alone, since other tools use it.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh
@@ -78,9 +86,11 @@ Homebrew installs can also go with `brew uninstall shrink`. On Windows: `irm htt
 ## Usage
 
 ```bash
-shrink <input> [target ...]          # one file
+shrink <input> [target ...]          # compress or convert one file
 shrink folder <folder> [target ...]  # every matching file in a folder
 shrink doctor                        # check ffmpeg and encoder availability
+shrink make [target ...]             # generate test media
+shrink update                        # self-update to the latest release
 ```
 
 Targets can be given in any order, and flags can appear anywhere:
@@ -94,23 +104,7 @@ shrink song.wav flac               # lossless conversion (level ignored)
 shrink folder ~/Media jpeg mp4 mp3 spacesaver
 ```
 
-With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) and compresses at the `compress` level. Running without ffmpeg on PATH fails fast with the right install hint for your platform instead of a confusing encode error.
-
-### Doctor
-
-`shrink doctor` prints a checklist of everything shrink depends on: ffmpeg/ffprobe, every encoder behind each target (a stripped-down ffmpeg build shows which targets are unavailable, e.g. `webp` needs `libwebp`), and hardware (`-f`) support. Exits 0 when the core tools are present, 1 when they are not; `-m` emits the same report as JSON.
-
-### Make
-
-`shrink make` generates test media with ffmpeg's lavfi sources — solid colors, SMPTE bars, test patterns, tones and noise — named after what's inside and written to the current directory:
-
-```bash
-shrink make mp4 red 1080p 60fps 30s   # red-1080p-60fps-30s.mp4
-shrink make jpeg teal                 # teal-1080p.jpg
-shrink make wav noise 5s              # noise-440hz-5s.wav
-```
-
-Targets are the familiar ones plus generation-specific ones: the format picks the kind of thing made (`mp4` video, `jpeg` image, `wav` audio — default `mp4`); content is a color name (`red`, `blue`, `gray`, ...) or `bars` / `test` / `noise` (audio takes `sine` / `noise`); `24fps`–`120fps` (default `60fps`); a duration like `10s` or `2m` (default `10s`, video/audio only); and `440hz` for the tone frequency. Videos include a sine soundtrack so audio paths get tested too, and level targets set the encode quality exactly like normal runs. `-n` previews the filename, `-m` reports the result as JSON.
+With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) and compresses at the `compress` level.
 
 ### Targets
 
@@ -157,6 +151,51 @@ Outputs are written next to the input, and existing files are never overwritten 
 - `-n` shows exactly what a run would do, without writing anything.
 - `-d` deletes each original once a smaller replacement exists (compressed or rescaled same-kind outputs only).
 
+### Doctor
+
+`shrink doctor` prints a checklist of everything shrink depends on — the core tools, every encoder behind each target, and hardware encoding (`-f`) support. A stripped-down ffmpeg build shows exactly which targets are unavailable, e.g. `webp` needs `libwebp`. Exits `0` when the core tools are present (missing optional encoders are reported, not fatal), `1` when they are not; `-m` emits the same report as JSON.
+
+```console
+$ shrink doctor
+shrink v0.6.0 doctor - darwin/arm64
+
+  ✓  ffmpeg        ffmpeg version 7.1 Copyright (c) 2000-2025 the FFmpeg developers
+  ✓  ffprobe       ffprobe version 7.1 Copyright (c) 2007-2025 the FFmpeg developers
+
+  ✓  libx264       mp4, mkv, mov, avi
+  ✓  libx265       hevc
+  ✓  libvpx-vp9    webm
+  ...
+  ✓  hardware (-f) VideoToolbox - -f encodes on the GPU
+
+✓ shrink is ready
+```
+
+### Make
+
+`shrink make` generates test media with ffmpeg's lavfi sources — solid colors, SMPTE bars, test patterns, tones, and noise — for trying shrink out or feeding test scripts. Files are named after what's inside and written to the current directory:
+
+```bash
+shrink make mp4 red 1080p 60fps 30s    # red-1080p-60fps-30s.mp4
+shrink make jpeg teal 720p             # teal-720p.jpg
+shrink make wav noise 5s               # noise-440hz-5s.wav
+shrink make mp4 bars 30fps 2m neversee # bars-1080p-30fps-2m-neversee.mp4
+```
+
+The format picks what gets made (`mp4` by default); everything else tunes it:
+
+| Target | Values |
+|--------|--------|
+| format | any video, image, or audio format — `mp4` (default), `jpeg`, `wav`, ... |
+| content | a named color (`red`, `blue`, `gray`, ...), `bars`, `test`, `noise`; audio takes `sine` (default) or `noise` |
+| resolution | any resolution target (default `1080p`) |
+| fps | `24fps` `25fps` `30fps` `50fps` `60fps` (default) `120fps` |
+| duration | `10s`, `2m`, ... (default `10s`, up to `60m`; video and audio only) |
+| frequency | `440hz`, ... (20–20000, audio tone; default `440hz`) |
+| level | a compression level, encoded exactly like a normal run |
+
+Videos include a sine soundtrack, so audio paths get tested too. `-n` previews the filename; `-m` reports the result as JSON.
+
 ### Supported inputs
 
 | Kind | Extensions |
@@ -185,7 +224,7 @@ Outputs are written next to the input, and existing files are never overwritten 
 | Code | Meaning |
 |------|---------|
 | `0` | success |
-| `1` | error — bad target, failed encode, no media found |
+| `1` | error — bad target, failed encode, no media found, missing ffmpeg |
 | `130` | cancelled with Ctrl+C — partial files are cleaned up |
 
 ### Shell completions
