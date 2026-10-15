@@ -123,7 +123,8 @@ func usage() {
 	fmt.Fprintf(out, "  %s\n", ui.bold("usage: shrink <input> [target...]"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink folder <folder> [format...] [level]"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink doctor   # check ffmpeg and encoder availability"))
-	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink make [targets...]   # generate test media"))
+	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink make [targets...]   # generate test media"))
+	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink update   # self-update to the latest release"))
 	fmt.Fprintf(out, "%s\n", ui.dim("  folder mode converts every matching file in place. Give one format per"))
 	fmt.Fprintf(out, "%s\n\n", ui.dim("  media kind (e.g. \"jpeg mp4 mp3\"); levels apply to all media. Add -r for subfolders."))
 	fmt.Fprintf(out, "%s\n", ui.bold("targets:"))
@@ -524,6 +525,14 @@ func main() {
 	if len(positional) > 0 && positional[0] == "make" {
 		runMake(positional[1:])
 		return
+	}
+
+	// "update" replaces the running binary with the newest release.
+	if len(positional) > 0 && positional[0] == "update" {
+		if len(positional) > 1 {
+			exitError("update takes no arguments - just: shrink update")
+		}
+		runUpdate()
 	}
 
 	// "folder" opens explicit folder mode: the next argument is the folder,

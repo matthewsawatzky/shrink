@@ -162,6 +162,7 @@ ensure_ffmpeg() {
 
 ensure_ffmpeg
 
+say "to update later: shrink update (or re-run this command)"
 say "to uninstall: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh"
 
 "$bindir/shrink" -V

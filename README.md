@@ -59,6 +59,12 @@ irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | 
 
 Every release is also available as a plain binary on the [releases page](https://github.com/matthewsawatzky/shrink/releases). macOS and Linux are the tested platforms.
 
+**Update:**
+
+- curl-installed: `shrink update` — checks GitHub for the latest release, verifies its checksum, and swaps the binary in place; a no-op when already current. Homebrew-managed installs are detected and pointed at `brew upgrade shrink` instead, and Windows works the same way (`irm ... | iex` not needed).
+- Homebrew: `brew upgrade shrink`
+- Go: `go install github.com/matthewsawatzky/shrink@latest`
+
 The installers notice when ffmpeg is missing and offer to install it for you (via brew on macOS, apt/dnf/pacman/apk/zypper on Linux, winget on Windows — with a manual hint when run without a terminal, since `curl | sh` can't prompt).
 
 **Uninstall** removes the binary, the Homebrew package (if installed that way) and the shell completions — ffmpeg is left alone since other tools use it:
