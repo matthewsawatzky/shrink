@@ -162,4 +162,6 @@ ensure_ffmpeg() {
 
 ensure_ffmpeg
 
+say "to uninstall: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh"
+
 "$bindir/shrink" -V

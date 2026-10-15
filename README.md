@@ -61,6 +61,14 @@ Every release is also available as a plain binary on the [releases page](https:/
 
 The installers notice when ffmpeg is missing and offer to install it for you (via brew on macOS, apt/dnf/pacman/apk/zypper on Linux, winget on Windows — with a manual hint when run without a terminal, since `curl | sh` can't prompt).
 
+**Uninstall** removes the binary, the Homebrew package (if installed that way) and the shell completions — ffmpeg is left alone since other tools use it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh
+```
+
+Homebrew installs can also go with `brew uninstall shrink`. On Windows: `irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.ps1 | iex`.
+
 ## Usage
 
 ```bash
