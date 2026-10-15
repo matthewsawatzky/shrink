@@ -94,6 +94,18 @@ With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) a
 
 `shrink doctor` prints a checklist of everything shrink depends on: ffmpeg/ffprobe, every encoder behind each target (a stripped-down ffmpeg build shows which targets are unavailable, e.g. `webp` needs `libwebp`), and hardware (`-f`) support. Exits 0 when the core tools are present, 1 when they are not; `-m` emits the same report as JSON.
 
+### Make
+
+`shrink make` generates test media with ffmpeg's lavfi sources — solid colors, SMPTE bars, test patterns, tones and noise — named after what's inside and written to the current directory:
+
+```bash
+shrink make mp4 red 1080p 60fps 30s   # red-1080p-60fps-30s.mp4
+shrink make jpeg teal                 # teal-1080p.jpg
+shrink make wav noise 5s              # noise-440hz-5s.wav
+```
+
+Targets are the familiar ones plus generation-specific ones: the format picks the kind of thing made (`mp4` video, `jpeg` image, `wav` audio — default `mp4`); content is a color name (`red`, `blue`, `gray`, ...) or `bars` / `test` / `noise` (audio takes `sine` / `noise`); `24fps`–`120fps` (default `60fps`); a duration like `10s` or `2m` (default `10s`, video/audio only); and `440hz` for the tone frequency. Videos include a sine soundtrack so audio paths get tested too, and level targets set the encode quality exactly like normal runs. `-n` previews the filename, `-m` reports the result as JSON.
+
 ### Targets
 
 | Type | Values |

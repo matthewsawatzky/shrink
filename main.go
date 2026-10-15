@@ -122,7 +122,8 @@ func usage() {
 	fmt.Fprintf(out, "%s %s\n\n", ui.bold("shrink"), ui.dim("- compress images, video and audio with ffmpeg"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("usage: shrink <input> [target...]"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink folder <folder> [format...] [level]"))
-	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink doctor   # check ffmpeg and encoder availability"))
+	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink doctor   # check ffmpeg and encoder availability"))
+	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink make [targets...]   # generate test media"))
 	fmt.Fprintf(out, "%s\n", ui.dim("  folder mode converts every matching file in place. Give one format per"))
 	fmt.Fprintf(out, "%s\n\n", ui.dim("  media kind (e.g. \"jpeg mp4 mp3\"); levels apply to all media. Add -r for subfolders."))
 	fmt.Fprintf(out, "%s\n", ui.bold("targets:"))
@@ -155,6 +156,7 @@ func usage() {
 		"shrink pic.heic 1080p jpeg neversee",
 		"shrink clip.mp4 mp3",
 		"shrink folder ~/Media jpeg mp4 mp3 spacesaver",
+		"shrink make mp4 red 1080p 60fps 30s",
 	} {
 		fmt.Fprintf(out, "  %s\n", ui.dim(ex))
 	}
@@ -165,6 +167,16 @@ func usage() {
 		{"neversee", "very compressed"},
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", l.name)), l.desc)
+	}
+	fmt.Fprintf(out, "\n%s\n", ui.bold("make targets (shrink make [targets...]):"))
+	for _, t := range []struct{ name, desc string }{
+		{"<format>", "mp4, jpeg, wav ... - the format picks the kind of thing made"},
+		{"<content>", "a color name (red, blue, gray...), bars, test, noise; sine for audio"},
+		{"<fps>", "24fps, 25fps, 30fps, 50fps, 60fps (default), 120fps"},
+		{"<duration>", "Ns or Nm, e.g. 10s, 2m (default 10s)"},
+		{"<hz>", "audio tone frequency, e.g. 440hz (default)"},
+	} {
+		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", t.name)), t.desc)
 	}
 }
 
@@ -506,6 +518,12 @@ func main() {
 			exitError("doctor takes no arguments - just: shrink doctor")
 		}
 		runDoctor()
+	}
+
+	// "make" generates test media; the rest of the line is targets.
+	if len(positional) > 0 && positional[0] == "make" {
+		runMake(positional[1:])
+		return
 	}
 
 	// "folder" opens explicit folder mode: the next argument is the folder,

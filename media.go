@@ -23,11 +23,14 @@ import (
 // already shows it - so a plain re-encode or conversion falls back to
 // "-compressed". The extension always reflects the true output format.
 func outputFileName(input, outKind, fmtName, operation, resolution, level string) string {
-	dir := filepath.Dir(input)
 	stem := candidateBase(input, outKind, fmtName, operation, resolution, level)
-	ext := outExt(outKind, fmtName)
+	return claimOutput(filepath.Dir(input), stem, outExt(outKind, fmtName))
+}
+
+// claimOutput reserves stem.ext in dir, bumping a counter when the name
+// is taken (an existing file, or a claim made earlier this run).
+func claimOutput(dir, stem, ext string) string {
 	out := filepath.Join(dir, stem+"."+ext)
-	// avoid overwriting existing files: bump a counter (unless -o)
 	for i := 1; !reserveOut(out); i++ {
 		out = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", stem, i, ext))
 	}
@@ -387,7 +390,7 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "compress"), nil
+	return finishJob(input, "video", out, took, "compress"), nil
 }
 
 // imageCodecArgs builds the encoder flags for one still-image output,
@@ -433,7 +436,7 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "compress"), nil
+	return finishJob(input, "image", out, took, "compress"), nil
 }
 
 func handleAudio(input string, audioFmt string, compress string, info mediaInfo) (*fileReport, error) {
@@ -448,13 +451,7 @@ func handleAudio(input string, audioFmt string, compress string, info mediaInfo)
 	af := audioFormats[audioFmt]
 
 	args := []string{"-i", input, "-c:a", af.codec}
-	if af.codec == "pcm_s16le" || af.codec == "flac" {
-		// lossless: ignore compression level
-	} else if af.codec == "libvorbis" {
-		args = append(args, "-q:a", levels.vorbisQ)
-	} else {
-		args = append(args, "-b:a", levels.audioBitrate)
-	}
+	args = append(args, audioEncodeArgs(af.codec, levels)...)
 
 	out := outputFileName(input, "audio", audioFmt, "", "", level)
 	args = append(args, out)
@@ -463,7 +460,20 @@ func handleAudio(input string, audioFmt string, compress string, info mediaInfo)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "compress"), nil
+	return finishJob(input, "audio", out, took, "compress"), nil
+}
+
+// audioEncodeArgs adds the quality settings for one audio codec at one
+// compression level; shared by audio conversion, track extraction and
+// shrink make.
+func audioEncodeArgs(codec string, levels levelSpec) []string {
+	switch {
+	case codec == "pcm_s16le", codec == "flac":
+		return nil // lossless: the level does not apply
+	case codec == "libvorbis":
+		return []string{"-q:a", levels.vorbisQ}
+	}
+	return []string{"-b:a", levels.audioBitrate}
 }
 
 // fileReport is one finished job's outcome. Parallel batches hold
@@ -515,14 +525,14 @@ func (r *fileReport) print() {
 // finishJob records a completed job. Human mode prints the summary line
 // and verbose steps unless a parallel batch is collecting reports;
 // machine mode appends a JSON result for the final document.
-func finishJob(input, out string, took time.Duration, operation string) *fileReport {
+func finishJob(input, kind, out string, took time.Duration, operation string) *fileReport {
 	statDone := trackStep(input, "stat output")
 	inSize, _ := os.Stat(input)
 	outSize, err := os.Stat(out)
 	statDone()
 
 	r := &fileReport{
-		input: input, out: out, kind: detectKind(input), operation: operation,
+		input: input, out: out, kind: kind, operation: operation,
 		took: took, statOK: err == nil,
 	}
 	if inSize != nil {
@@ -534,10 +544,13 @@ func finishJob(input, out string, took time.Duration, operation string) *fileRep
 	r.warning = sizeWarning(input, out)
 
 	// -d: remove the original once a smaller replacement exists. Derived
-	// outputs (audio tracks, frame grabs) never qualify, and neither does
-	// an "output" that didn't actually shrink.
+	// outputs (audio tracks, frame grabs) never qualify, generated files
+	// have no original to remove, and neither does an "output" that
+	// didn't actually shrink.
 	if deleteAfter {
 		switch {
+		case operation == "make":
+			// generated files have no original
 		case operation != "compress" && operation != "rescale":
 			r.delNote = "kept the original: this run made a derived file, not a compressed version"
 		case !r.statOK:
@@ -586,14 +599,7 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, info m
 	af := audioFormats[audioFmt]
 
 	args := []string{"-i", input, "-vn", "-c:a", af.codec}
-	switch af.codec {
-	case "pcm_s16le", "flac":
-		// lossless: ignore compression level
-	case "libvorbis":
-		args = append(args, "-q:a", levels.vorbisQ)
-	default:
-		args = append(args, "-b:a", levels.audioBitrate)
-	}
+	args = append(args, audioEncodeArgs(af.codec, levels)...)
 
 	out := outputFileName(input, "audio", audioFmt, "audio", "", level)
 	args = append(args, out)
@@ -602,7 +608,7 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, info m
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "extract_audio"), nil
+	return finishJob(input, "video", out, took, "extract_audio"), nil
 }
 
 // handleVideoToImage grabs a single frame from a video, e.g.
@@ -628,7 +634,7 @@ func handleVideoToImage(input string, resolution string, imageFmt string, compre
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "grab_frame"), nil
+	return finishJob(input, "image", out, took, "grab_frame"), nil
 }
 
 // transparentCRF is the near-lossless grade used when the only real work
@@ -672,7 +678,7 @@ func handleRescaleVideo(input string, resolution string, videoFmt string, info m
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "rescale"), nil
+	return finishJob(input, "video", out, took, "rescale"), nil
 }
 
 // handleRescaleImage downscales an already-compressed image at a
@@ -691,5 +697,5 @@ func handleRescaleImage(input string, resolution string, imageFmt string) (*file
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(input, out, took, "rescale"), nil
+	return finishJob(input, "image", out, took, "rescale"), nil
 }
