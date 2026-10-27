@@ -74,16 +74,16 @@ func parseProbeInfo(path string, data []byte) (fileInfo, error) {
 			Size     string `json:"size"`
 		} `json:"format"`
 		Streams []struct {
-			Index         int    `json:"index"`
-			CodecType     string `json:"codec_type"`
-			CodecName     string `json:"codec_name"`
-			Width         int    `json:"width"`
-			Height        int    `json:"height"`
-			AvgFrameRate  string `json:"avg_frame_rate"`
-			NbFrames      string `json:"nb_frames"`
-			Duration      string `json:"duration"`
-			SampleRate    string `json:"sample_rate"`
-			Channels      int    `json:"channels"`
+			Index        int    `json:"index"`
+			CodecType    string `json:"codec_type"`
+			CodecName    string `json:"codec_name"`
+			Width        int    `json:"width"`
+			Height       int    `json:"height"`
+			AvgFrameRate string `json:"avg_frame_rate"`
+			NbFrames     string `json:"nb_frames"`
+			Duration     string `json:"duration"`
+			SampleRate   string `json:"sample_rate"`
+			Channels     int    `json:"channels"`
 		} `json:"streams"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
