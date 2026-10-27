@@ -20,7 +20,7 @@ Thanks for wanting to help. This covers building, testing, and releasing shrink.
 go test -race ./...
 ```
 
-CI runs the same on every push and pull request ([ci.yml](.github/workflows/ci.yml)):
+CI runs the same on pull requests and manual runs ([ci.yml](.github/workflows/ci.yml)):
 
 ```bash
 gofmt -l .       # must print nothing
@@ -73,15 +73,23 @@ These rules apply before `1.0.0` too. A substantial addition can warrant a major
 
 ## Releasing
 
-Release from an up-to-date `main` branch with remote tags fetched. GitHub Actions is the sole publisher; the local script validates and pushes the commit and tag together.
+Release from an up-to-date `main` branch. Releases run on your machine, reusing the Go build cache instead of waiting for a new GitHub runner. Install Go, ffmpeg/ffprobe, the GitHub CLI (`gh auth login`), and the usual tar/SHA-256 tools first.
 
-1. Fetch current tags: `git fetch origin --tags`.
+1. Fetch current tags: `git fetch origin --tags`. The release command also fetches them before selecting its version.
 2. Choose `major`, `minor` or `patch` using the table above. Preview the next version with `./release.sh --next major` (or `minor`/`patch`).
 3. Move the unreleased bullets into a dated section such as `## [1.1.0] - 2026-11-02`. Keep an empty `## [Unreleased]` section at the top. Review compatibility notes and the README.
 4. Preview the exact public release notes: `./scripts/release-notes.sh v1.1.0`.
 5. Commit the code, documentation and changelog. Then run `./release.sh minor`, or give the exact next version: `./release.sh v1.1.0`.
-6. Wait for the Release workflow to pass and confirm that the published release contains all six platform archives and the checksums file.
+6. The command runs checks and integration tests locally, builds all six platform archives, pushes the commit/tag, and uploads a draft with the changelog and checksums. It publishes only when every upload succeeds, then prints the release URL. No Actions run is required.
 
-The script rejects skipped version numbers, malformed versions, missing/empty changelog entries, a dirty checkout, and releases outside `main`. It runs vet and race-enabled tests before creating a tag, then pushes `main` and that tag atomically. If a push fails, fix the cause and push the existing tag; do not create a different release tag for the same intended version.
+The script rejects skipped version numbers, malformed versions, missing/empty changelog entries, a dirty checkout, and releases outside `main`. It requires ffmpeg/ffprobe so integration tests cannot silently skip. It runs formatting, vet and race-enabled tests before building. Your Go cache is reused, so later release builds are faster. `install.sh` and `shrink update` pick up the release as soon as the command finishes.
 
-The workflow extracts notes from the committed changelog using the same helper, verifies the tag, runs CI, builds macOS/Linux/Windows for arm64 and amd64, and publishes the archives with checksums. `install.sh` and `shrink update` pick up the latest release immediately. Do not publish a second release manually with `gh release create`.
+If a push or upload fails after a tag was created, retry with `./release.sh --resume v1.1.0` from that tag's commit on `main`. This rebuilds and verifies the same release, completes a draft if present, and publishes it after all assets are uploaded. Already-published releases are never overwritten.
+
+## What GitHub Actions still does
+
+- Pull requests run the full verification suite automatically. Superseded runs are cancelled.
+- The CI workflow can also be started manually. Normal pushes to `main` and release tags do not trigger duplicate checks or release builds.
+- **Release fallback** is a manual recovery path when local publishing is unavailable. Push the intended release tag, then run `gh workflow run release.yml -f tag=v1.1.0`. It checks out and verifies that exact tag before building and publishing with the same helpers. Use it for tags created after the local release tooling was introduced.
+
+Both local and fallback publishing share `scripts/publish-release.sh`, which validates the six archives and their checksums, uploads into a draft, and publishes only once the complete release is present. Keep the changelog and version process the same regardless of where the build runs.

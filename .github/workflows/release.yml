@@ -1,41 +1,48 @@
-name: Release
+name: Release fallback
 
-# pushing a v* tag builds every platform and publishes the release -
-# no manual steps; install.sh picks the release up immediately.
+# Normal releases run locally. Use this only when local publishing is unavailable.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v1.1.0
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
   checks:
     uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ inputs.tag }}
   release:
     needs: checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
       - name: Validate and extract changelog
         run: ./scripts/release-notes.sh "$RELEASE_TAG" > "$RUNNER_TEMP/shrink-notes.txt"
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
       - name: Build all platforms
         run: ./build.sh "$RELEASE_TAG"
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-      - name: Publish release
-        run: |
-          gh release create "$RELEASE_TAG" dist/* --verify-tag \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "shrink $RELEASE_TAG" \
-            --notes-file "$RUNNER_TEMP/shrink-notes.txt"
+          RELEASE_TAG: ${{ inputs.tag }}
+      - name: Publish complete release
+        run: ./scripts/publish-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/shrink-notes.txt"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}

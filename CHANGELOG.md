@@ -6,6 +6,11 @@ Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## [Unreleased]
 
+### Changed
+
+- Releases now verify, build and publish locally using the existing Go cache. GitHub Actions remains available for pull-request checks and manual release recovery.
+- Interrupted releases can be resumed; all archives upload into a draft before a complete release is published.
+
 ## [1.0.0] - 2026-10-27
 
 ### Added
