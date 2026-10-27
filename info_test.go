@@ -100,6 +100,15 @@ func TestParseProbeInfoVideo(t *testing.T) {
 	if info.Format.Name != "mov" {
 		t.Errorf("Format.Name = %q, want mov", info.Format.Name)
 	}
+	if info.Format.Extension != "mp4" {
+		t.Errorf("Format.Extension = %q, want mp4", info.Format.Extension)
+	}
+	if info.Format.AllNames != "mov,mp4,m4a,3gp,3g2,mj2" {
+		t.Errorf("Format.AllNames = %q, want mov,mp4,m4a,3gp,3g2,mj2", info.Format.AllNames)
+	}
+	if !info.Format.MatchOK {
+		t.Error("Format.MatchOK = false, want true for .mp4 in container list")
+	}
 	if info.Format.Duration != 74.8 {
 		t.Errorf("Format.Duration = %v, want 74.8", info.Format.Duration)
 	}
@@ -176,6 +185,41 @@ func TestParseProbeInfoNoStreams(t *testing.T) {
 	}
 	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "no video or audio streams") {
 		t.Errorf("warnings = %v, want no-streams warning", info.Warnings)
+	}
+}
+
+func TestParseProbeInfoExtensionMismatch(t *testing.T) {
+	data := []byte(`{
+		"format": {"format_name": "matroska,webm", "duration": "10.000000", "size": "1000"},
+		"streams": [
+			{
+				"index": 0,
+				"codec_type": "video",
+				"codec_name": "h264",
+				"width": 1920,
+				"height": 1080,
+				"avg_frame_rate": "30/1",
+				"nb_frames": "300",
+				"duration": "10.000000"
+			}
+		]
+	}`)
+
+	info, err := parseProbeInfo("clip.mp4", data)
+	if err != nil {
+		t.Fatalf("parseProbeInfo: %v", err)
+	}
+	if info.Format.MatchOK {
+		t.Fatal("expected extension mismatch for .mp4 vs matroska")
+	}
+	found := false
+	for _, w := range info.Warnings {
+		if strings.Contains(w, "file extension .mp4 does not match") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want extension-mismatch warning", info.Warnings)
 	}
 }
 

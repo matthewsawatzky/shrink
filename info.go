@@ -28,10 +28,13 @@ type streamInfo struct {
 
 // formatInfo is the container-level metadata ffprobe returns.
 type formatInfo struct {
-	Name     string  `json:"name"`
-	Duration float64 `json:"duration"`
-	BitRate  int64   `json:"bit_rate,omitempty"`
-	Size     int64   `json:"size"`
+	Name      string  `json:"name"`
+	AllNames  string  `json:"all_names"`
+	Extension string  `json:"extension"`
+	MatchOK   bool    `json:"extension_matches_container"`
+	Duration  float64 `json:"duration"`
+	BitRate   int64   `json:"bit_rate,omitempty"`
+	Size      int64   `json:"size"`
 }
 
 // fileInfo is everything shrink info reports for one input path.
@@ -91,7 +94,20 @@ func parseProbeInfo(path string, data []byte) (fileInfo, error) {
 	}
 
 	info := fileInfo{Path: path, Kind: detectKind(path)}
-	info.Format.Name = strings.Split(probe.Format.Name, ",")[0]
+	names := strings.Split(probe.Format.Name, ",")
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != "" && ext[0] == '.' {
+		ext = ext[1:]
+	}
+	info.Format.Extension = ext
+	info.Format.AllNames = probe.Format.Name
+	info.Format.Name = names[0]
+	for _, n := range names {
+		if n == ext {
+			info.Format.MatchOK = true
+			break
+		}
+	}
 	info.Format.Duration = parseDuration(probe.Format.Duration)
 	info.Format.BitRate = parseInt64(probe.Format.BitRate)
 	info.Format.Size = parseInt64(probe.Format.Size)
@@ -124,6 +140,15 @@ func parseProbeInfo(path string, data []byte) (fileInfo, error) {
 
 	if !hasVideo && !hasAudio {
 		info.Warnings = append(info.Warnings, "no video or audio streams found")
+	}
+
+	// Flag when the file extension does not match any of the container
+	// formats ffprobe reports. That can mean a mis-named file that some
+	// players will refuse to open.
+	if ext != "" && !info.Format.MatchOK {
+		info.Warnings = append(info.Warnings, fmt.Sprintf(
+			"file extension .%s does not match the container format (%s)",
+			ext, info.Format.AllNames))
 	}
 
 	// Flag stream/container duration disagreements, which can confuse the
@@ -220,17 +245,27 @@ func runInfo(paths []string) {
 func printFileInfo(info fileInfo) {
 	fmt.Fprintf(os.Stderr, "%s\n", ui.bold(filepath.Base(info.Path)))
 
-	meta := []string{info.Kind}
-	if info.Format.Name != "" {
-		meta = append(meta, info.Format.Name)
+	ext := info.Format.Extension
+	if ext == "" {
+		ext = "none"
 	}
+	fmt.Fprintf(os.Stderr, "  %s .%s", ui.dim("extension:"), ext)
+	if info.Format.AllNames != "" {
+		fmt.Fprintf(os.Stderr, "  %s %s", ui.dim("container:"), info.Format.AllNames)
+	}
+	if !info.Format.MatchOK && info.Format.Extension != "" {
+		fmt.Fprintf(os.Stderr, "  %s", ui.yellow("(mismatch)"))
+	}
+	fmt.Fprintln(os.Stderr)
+
+	meta := []string{info.Kind}
 	if info.Format.Size > 0 {
 		meta = append(meta, humanSize(info.Format.Size))
 	}
 	if info.Format.BitRate > 0 {
 		meta = append(meta, humanBitRate(info.Format.BitRate))
 	}
-	fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim("container:"), strings.Join(meta, " · "))
+	fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim("type:"), strings.Join(meta, " · "))
 
 	if info.Format.Duration > 0 {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim("duration:"), humanDuration(info.Format.Duration))
