@@ -88,6 +88,7 @@ Homebrew installs can also go with `brew uninstall shrink`. On Windows: `irm htt
 ```bash
 shrink <input> [target ...]          # compress or convert one file
 shrink folder <folder> [target ...]  # every matching file in a folder
+shrink info <file> ...               # inspect codecs, duration, fps, bitrate
 shrink doctor                        # check ffmpeg and encoder availability
 shrink make [target ...]             # generate test media
 shrink update                        # self-update to the latest release

@@ -133,6 +133,7 @@ func usage() {
 	fmt.Fprintf(out, "%s %s\n\n", ui.bold("shrink"), ui.dim("- compress images, video and audio with ffmpeg"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("usage: shrink <input> [target...]"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink folder <folder> [format...] [level]"))
+	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink info <file>...   # inspect codecs, duration, fps, bitrate"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink doctor   # check ffmpeg and encoder availability"))
 	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink make [targets...]   # generate test media"))
 	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink update   # self-update to the latest release"))
@@ -575,6 +576,12 @@ func main() {
 	if len(positional) == 0 {
 		usage()
 		os.Exit(1)
+	}
+
+	// "info" prints a concise probe of one or more files.
+	if len(positional) > 0 && positional[0] == "info" {
+		runInfo(positional[1:])
+		return
 	}
 
 	// "doctor" checks the install: ffmpeg, ffprobe and every encoder
