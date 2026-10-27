@@ -185,3 +185,48 @@ func TestAtempoChain(t *testing.T) {
 		}
 	}
 }
+
+func TestPlainRun(t *testing.T) {
+	bare := options{}
+	if !bare.plainRun() {
+		t.Error("a run with no targets is a plain run")
+	}
+	level := options{compress: "spacesaver"}
+	if !level.plainRun() {
+		t.Error("an explicit level alone is still a bare-compression run shape")
+	}
+	res := options{resolution: "720p"}
+	if res.plainRun() {
+		t.Error("a resolution target is not a plain run")
+	}
+	spd := options{speed: "x5"}
+	if spd.plainRun() {
+		t.Error("a speed target is not a plain run")
+	}
+	for name, fmtOpt := range map[string]options{
+		"video": {videoFmt: "mp4"}, "image": {imageFmt: "png"}, "audio": {audioFmt: "mp3"},
+	} {
+		if fmtOpt.plainRun() {
+			t.Errorf("a %s target is not a plain run", name)
+		}
+	}
+}
+
+func TestTransparentLevel(t *testing.T) {
+	// each codec family has its own near-lossless CRF
+	if got := videoCRF("libx264", transparentLevel); got != "18" {
+		t.Errorf("videoCRF(libx264, transparent) = %q, want 18", got)
+	}
+	if got := videoCRF("libx265", transparentLevel); got != "22" {
+		t.Errorf("videoCRF(libx265, transparent) = %q, want 22", got)
+	}
+	if got := videoCRF("libvpx-vp9", transparentLevel); got != "28" {
+		t.Errorf("videoCRF(libvpx-vp9, transparent) = %q, want 28", got)
+	}
+	if got := videoCRF("libvpx-vp9", compressionLevels["compress"]); got != "23" {
+		t.Errorf("preset levels keep the vp9 fallback: got %q, want 23", got)
+	}
+	if got := audioEncodeArgs("libmp3lame", transparentLevel); got[1] != "256k" {
+		t.Errorf("transparent audio bitrate = %q, want 256k", got[1])
+	}
+}

@@ -112,6 +112,7 @@ func TestBitrateForLevel(t *testing.T) {
 		want     int
 	}{
 		{"compress", 6_000_000, 3000},
+		{"transparent", 6_000_000, 3600},
 		{"spacesaver", 6_000_000, 2100},
 		{"neversee", 6_000_000, 1200},
 		{"neversee", 800_000, 250}, // floor for tiny sources

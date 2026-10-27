@@ -107,7 +107,7 @@ shrink podcast.mp3 x2              # double-speed audio
 shrink folder ~/Media jpeg mp4 mp3 spacesaver
 ```
 
-With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) and compresses at the `compress` level.
+With no targets at all, shrink compresses at the `compress` level; with targets but no level, only the asked-for operations run (see [When compression happens](#when-compression-happens)).
 
 ### Targets
 
@@ -124,6 +124,15 @@ With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) a
 - Resolution targets only ever downscale: an input smaller than the target keeps its size.
 - `wav` and `flac` are lossless, so they ignore the compression level.
 - A speed target over 1 speeds up, under 1 slows down: `x5` plays five times faster (a 1-minute video becomes 12 seconds), `x0.1` ten times slower (6 minutes). Video frames are re-timed and audio is stretched with ffmpeg's tempo filter, so pitch stays the same. Speed applies to video and audio only (images cannot be sped), and it combines with format, resolution and level targets.
+
+### When compression happens
+
+Compression only applies when you ask for it: an explicit level (`compress`, `spacesaver`, `neversee`), or a bare `shrink <input>` run with no other targets (which defaults to `compress`). Any specific run — a scale, a speed factor, a format conversion, an audio extraction — performs just that operation at near-lossless quality (an AAC track is even copied through untouched). Add a level to compress on top of an operation:
+
+```bash
+shrink cam.mp4 720p               # downscale only, near-lossless
+shrink cam.mp4 720p spacesaver    # downscale and compress heavily
+```
 
 ### Compression levels
 

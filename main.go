@@ -35,6 +35,7 @@ var deleteAfter bool
 type levelSpec struct {
 	videoCRF     string // libx264 CRF
 	hevcCRF      string // libx265 CRF (its quality scale differs from x264)
+	vp9CRF       string // libvpx-vp9 CRF
 	av1CRF       string // libsvtav1 CRF
 	audioBitrate string
 	imageQuality string // quality scale for mjpeg (2-31, higher = smaller)
@@ -48,6 +49,16 @@ var compressionLevels = map[string]levelSpec{
 	"compress":   {videoCRF: "23", hevcCRF: "28", av1CRF: "32", audioBitrate: "128k", imageQuality: "4", webpQuality: "80", vorbisQ: "5"},
 	"spacesaver": {videoCRF: "28", hevcCRF: "32", av1CRF: "40", audioBitrate: "96k", imageQuality: "7", webpQuality: "65", vorbisQ: "3"},
 	"neversee":   {videoCRF: "34", hevcCRF: "38", av1CRF: "48", audioBitrate: "64k", imageQuality: "12", webpQuality: "40", vorbisQ: "1"},
+}
+
+// transparentLevel is the near-lossless grade used when a run performs
+// only the operations it was given (a scale, a speed factor, a format
+// conversion, an audio extraction) with no compression level. Compressing
+// would stack quality losses on work the user didn't ask for; audio that
+// can be copied is copied outright.
+var transparentLevel = levelSpec{
+	videoCRF: "18", hevcCRF: "22", vp9CRF: "28", av1CRF: "30",
+	audioBitrate: "256k", imageQuality: "2", webpQuality: "95", vorbisQ: "10",
 }
 
 // Resolution map: height -> scale filter args. The min() cap never
@@ -173,6 +184,9 @@ func usage() {
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", l.name)), l.desc)
 	}
+	fmt.Fprintf(out, "\n%s\n", ui.dim("  A bare shrink <file> run compresses (the compress level). Any specific operation -"))
+	fmt.Fprintf(out, "%s\n", ui.dim("  scale, speed, format, audio extraction - runs alone at near-lossless quality: pass"))
+	fmt.Fprintf(out, "%s\n", ui.dim("  a level to compress on top of it."))
 	fmt.Fprintf(out, "\n%s\n", ui.bold("make targets (shrink make [targets...]):"))
 	for _, t := range []struct{ name, desc string }{
 		{"<format>", "mp4, jpeg, wav ... - the format picks the kind of thing made"},
@@ -388,6 +402,13 @@ type options struct {
 	speed              string // raw factor as typed, e.g. "x5" or "x0.1"
 }
 
+// plainRun reports whether this run is a bare compression request: an
+// input with no targets at all. That is the only shape that defaults to
+// the compress level; specific operations run compression-free instead.
+func (o options) plainRun() bool {
+	return o.resolution == "" && o.videoFmt == "" && o.imageFmt == "" && o.audioFmt == "" && o.speed == ""
+}
+
 // resHeight returns the pixel height a resolution target caps at.
 func resHeight(name string) int {
 	if name == "4k" {
@@ -476,20 +497,29 @@ func processOne(input string, o options) (*fileReport, error) {
 		}
 	}
 
+	// Grade: a bare "shrink file" run defaults to the compress level.
+	// Anything more specific (scale, speed, format, extraction) performs
+	// that operation alone at a near-lossless grade - compression requires
+	// an explicit level.
+	grade := o.compress
+	if grade == "" && o.plainRun() {
+		grade = "compress"
+	}
+
 	switch kind {
 	case "video":
 		switch {
 		case o.audioFmt != "":
-			return handleAudioFromVideo(input, o.audioFmt, o.compress, o.speed, info)
+			return handleAudioFromVideo(input, o.audioFmt, grade, o.speed, info)
 		case o.imageFmt != "":
-			return handleVideoToImage(input, o.resolution, o.imageFmt, o.compress, info)
+			return handleVideoToImage(input, o.resolution, o.imageFmt, grade, info)
 		default:
-			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), o.compress, o.speed, info)
+			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), grade, o.speed, info)
 		}
 	case "image":
-		return handleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"), o.compress)
+		return handleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"), grade)
 	case "audio":
-		return handleAudio(input, coalesce(o.audioFmt, "mp3"), o.compress, o.speed, info)
+		return handleAudio(input, coalesce(o.audioFmt, "mp3"), grade, o.speed, info)
 	}
 	return nil, fmt.Errorf("no handler for %s", input)
 }

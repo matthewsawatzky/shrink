@@ -316,6 +316,8 @@ func encoderAvailable(name string) bool { return ffmpegEncoders()[name] }
 func bitrateForLevel(compress string, bitRate int64) int {
 	factor := 0.5
 	switch compress {
+	case "transparent": // hardware has no CRF; a fat bitrate nears it
+		factor = 0.6
 	case "spacesaver":
 		factor = 0.35
 	case "neversee":
@@ -359,6 +361,10 @@ func videoCRF(codec string, lv levelSpec) string {
 		return lv.hevcCRF
 	case "libsvtav1":
 		return lv.av1CRF
+	case "libvpx-vp9":
+		if lv.vp9CRF != "" {
+			return lv.vp9CRF
+		}
 	}
 	return lv.videoCRF
 }
@@ -367,11 +373,15 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	if videoFmt == "" {
 		videoFmt = "mp4"
 	}
+	// an explicit level compresses; without one the run only performs the
+	// operations asked for, at a near-lossless grade
 	level := compress
-	if compress == "" {
-		compress = "compress"
+	levels := transparentLevel
+	grade := "transparent"
+	if compress != "" {
+		levels = compressionLevels[compress]
+		grade = compress
 	}
-	levels := compressionLevels[compress]
 	vf := videoFormats[videoFmt]
 
 	// -f: swap in the hardware encoder for x264/x265 targets when one
@@ -379,7 +389,7 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	codec, encArgs := vf.codec, vf.args
 	crf := videoCRF(codec, levels)
 	if fast {
-		if hw, hwArgs, ok := hwEncodeFor(codec, compress, info); ok {
+		if hw, hwArgs, ok := hwEncodeFor(codec, grade, info); ok {
 			codec = hw
 			if videoFmt == "mp4" || videoFmt == "mov" {
 				hwArgs = append(hwArgs, "-movflags", "+faststart")
@@ -395,9 +405,14 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	}
 	args = append(args, encArgs...)
 
-	if videoFmt != "webm" {
+	switch {
+	// no compression requested, the source audio is aac and nothing
+	// needs to re-time it: copy the track through untouched
+	case compress == "" && speed == "" && videoFmt != "webm" && info.audioCodec == "aac":
+		args = append(args, "-c:a", "copy")
+	case videoFmt != "webm":
 		args = append(args, "-c:a", "aac", "-b:a", levels.audioBitrate)
-	} else {
+	default:
 		args = append(args, "-c:a", "libopus", "-b:a", levels.audioBitrate)
 	}
 
@@ -420,6 +435,9 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	args = append(args, out)
 
 	label := "compressing"
+	if compress == "" {
+		label = "converting"
+	}
 	if resolution != "" {
 		label += " + scaling"
 	}
@@ -452,11 +470,10 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	if imageFmt == "" {
 		imageFmt = "jpeg"
 	}
-	level := compress
-	if compress == "" {
-		compress = "compress"
+	levels := transparentLevel
+	if compress != "" {
+		levels = compressionLevels[compress]
 	}
-	levels := compressionLevels[compress]
 	img := imageFormats[imageFmt]
 
 	args := []string{"-i", input}
@@ -465,12 +482,15 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	}
 	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
 
-	out := outputFileName(input, "image", imageFmt, "", resolution, level, "")
+	out := outputFileName(input, "image", imageFmt, "", resolution, compress, "")
 	args = append(args, "-frames:v", "1", out)
 
 	label := "compressing"
+	if compress == "" {
+		label = "converting"
+	}
 	if resolution != "" {
-		label = "compressing + scaling"
+		label += " + scaling"
 	}
 	took, err := runFFmpeg(label, args...)
 	if err != nil {
@@ -483,11 +503,10 @@ func handleAudio(input string, audioFmt string, compress string, speed string, i
 	if audioFmt == "" {
 		audioFmt = "mp3"
 	}
-	level := compress
-	if compress == "" {
-		compress = "compress"
+	levels := transparentLevel
+	if compress != "" {
+		levels = compressionLevels[compress]
 	}
-	levels := compressionLevels[compress]
 	af := audioFormats[audioFmt]
 
 	args := []string{"-i", input, "-c:a", af.codec}
@@ -497,10 +516,13 @@ func handleAudio(input string, audioFmt string, compress string, speed string, i
 		args = append(args, "-af", atempoChain(v))
 	}
 
-	out := outputFileName(input, "audio", audioFmt, "", "", level, speed)
+	out := outputFileName(input, "audio", audioFmt, "", "", compress, speed)
 	args = append(args, out)
 
 	label := "compressing"
+	if compress == "" {
+		label = "converting"
+	}
 	if speed != "" {
 		label += " + speed"
 	}
@@ -640,11 +662,10 @@ func finishJob(input, kind, out string, took time.Duration, operation string) *f
 // file, e.g. "shrink clip.mp4 mp3". A speed target rides along as an
 // atempo filter on the extracted track.
 func handleAudioFromVideo(input string, audioFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
-	level := compress
-	if compress == "" {
-		compress = "compress"
+	levels := transparentLevel
+	if compress != "" {
+		levels = compressionLevels[compress]
 	}
-	levels := compressionLevels[compress]
 	af := audioFormats[audioFmt]
 
 	args := []string{"-i", input, "-vn", "-c:a", af.codec}
@@ -654,7 +675,7 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, speed 
 		args = append(args, "-af", atempoChain(v))
 	}
 
-	out := outputFileName(input, "audio", audioFmt, "audio", "", level, speed)
+	out := outputFileName(input, "audio", audioFmt, "audio", "", compress, speed)
 	args = append(args, out)
 
 	took, err := runFFmpegWithDuration("extracting audio", info.duration, args...)
@@ -667,11 +688,10 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, speed 
 // handleVideoToImage grabs a single frame from a video, e.g.
 // "shrink clip.mp4 png". Resolution target scales the grabbed frame.
 func handleVideoToImage(input string, resolution string, imageFmt string, compress string, info mediaInfo) (*fileReport, error) {
-	level := compress
-	if compress == "" {
-		compress = "compress"
+	levels := transparentLevel
+	if compress != "" {
+		levels = compressionLevels[compress]
 	}
-	levels := compressionLevels[compress]
 	img := imageFormats[imageFmt]
 
 	args := []string{"-i", input}
@@ -680,7 +700,7 @@ func handleVideoToImage(input string, resolution string, imageFmt string, compre
 	}
 	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
 
-	out := outputFileName(input, "image", imageFmt, "frame", resolution, level, "")
+	out := outputFileName(input, "image", imageFmt, "frame", resolution, compress, "")
 	args = append(args, "-frames:v", "1", "-update", "1", out)
 
 	took, err := runFFmpegWithDuration("grabbing frame", info.duration, args...)
