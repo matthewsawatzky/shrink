@@ -63,6 +63,29 @@ func setptsFilter(speed string) string {
 	return "setpts=PTS/" + strings.TrimPrefix(speed, "x")
 }
 
+// playbackStretch returns the factor a speed target stretches the output
+// timeline by: x2 packs it to half the input's length, x0.1 makes it ten
+// times longer. 1 without a speed target.
+func playbackStretch(speed string) float64 {
+	if speed == "" {
+		return 1
+	}
+	v, _, _ := parseSpeed(speed)
+	return 1 / v
+}
+
+// progressDuration maps the input's duration onto the output timeline
+// for the progress bar: the bar tracks ffmpeg's output timestamps
+// (out_time), which x-targets compress or stretch, so a bare input
+// duration would report x2 runs as half done and x0.1 runs as 10x done.
+// 0 passes through (unknown durations get the spinner either way).
+func progressDuration(info mediaInfo, speed string) float64 {
+	if info.duration <= 0 {
+		return 0
+	}
+	return info.duration * playbackStretch(speed)
+}
+
 // atempoChain renders one speed factor as an atempo filter chain. A
 // single atempo only accepts 0.5 through 100, so factors outside that
 // range chain stages: x0.1 becomes atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8.
@@ -444,7 +467,7 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 	if speed != "" {
 		label += " + speed"
 	}
-	took, err := runFFmpegWithDuration(label, info.duration, args...)
+	took, err := runFFmpegWithDuration(label, progressDuration(info, speed), args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
@@ -526,7 +549,7 @@ func handleAudio(input string, audioFmt string, compress string, speed string, i
 	if speed != "" {
 		label += " + speed"
 	}
-	took, err := runFFmpegWithDuration(label, info.duration, args...)
+	took, err := runFFmpegWithDuration(label, progressDuration(info, speed), args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
@@ -678,7 +701,7 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, speed 
 	out := outputFileName(input, "audio", audioFmt, "audio", "", compress, speed)
 	args = append(args, out)
 
-	took, err := runFFmpegWithDuration("extracting audio", info.duration, args...)
+	took, err := runFFmpegWithDuration("extracting audio", progressDuration(info, speed), args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}

@@ -157,6 +157,28 @@ func TestParseSpeed(t *testing.T) {
 	}
 }
 
+func TestProgressDuration(t *testing.T) {
+	info := mediaInfo{duration: 60} // one minute of input
+
+	// no speed target: the bar tracks the input timeline
+	if got := progressDuration(info, ""); got != 60 {
+		t.Errorf("progressDuration(no speed) = %v, want 60", got)
+	}
+	// x2: the output timeline is half as long, so the bar fills against
+	// 30s of output time - 100% when the last frame is encoded
+	if got := progressDuration(info, "x2"); got != 30 {
+		t.Errorf("progressDuration(x2) = %v, want 30", got)
+	}
+	// x0.1: ten times longer
+	if got := progressDuration(info, "x0.1"); got != 600 {
+		t.Errorf("progressDuration(x0.1) = %v, want 600", got)
+	}
+	// unknown input durations stay 0 (spinner mode)
+	if got := progressDuration(mediaInfo{}, "x2"); got != 0 {
+		t.Errorf("progressDuration(unknown) = %v, want 0", got)
+	}
+}
+
 func TestSetptsFilter(t *testing.T) {
 	if got, want := setptsFilter("x5"), "setpts=PTS/5"; got != want {
 		t.Errorf("setptsFilter(x5) = %q, want %q", got, want)
