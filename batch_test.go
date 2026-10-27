@@ -45,51 +45,53 @@ func TestFailMsg(t *testing.T) {
 	}
 }
 
-func TestWouldProduce(t *testing.T) {
+func TestDescribeJob(t *testing.T) {
+	a := testApplication()
+
 	dir := t.TempDir()
 
 	// plain video re-encode
 	f := filepath.Join(dir, "v.mp4")
-	if got, want := wouldProduce(f, "video", options{}), filepath.Join(dir, "v-compressed.mp4"); got != want {
+	if got, want := a.describeJob(f, "video", options{}).output, filepath.Join(dir, "v-compressed.mp4"); got != want {
 		t.Errorf("video default = %q, want %q", got, want)
 	}
 
 	// audio extraction names the operation
-	if got, want := wouldProduce(f, "video", options{audioFmt: "mp3"}), filepath.Join(dir, "v-audio.mp3"); got != want {
+	if got, want := a.describeJob(f, "video", options{audioFmt: "mp3"}).output, filepath.Join(dir, "v-audio.mp3"); got != want {
 		t.Errorf("audio extract = %q, want %q", got, want)
 	}
 
 	// frame grabs tag the operation and resolution
-	if got, want := wouldProduce(f, "video", options{imageFmt: "png", resolution: "720p"}), filepath.Join(dir, "v-720p-frame.png"); got != want {
+	if got, want := a.describeJob(f, "video", options{imageFmt: "png", resolution: "720p"}).output, filepath.Join(dir, "v-720p-frame.png"); got != want {
 		t.Errorf("frame grab = %q, want %q", got, want)
 	}
 
 	// resolution and level tags
-	if got, want := wouldProduce(f, "video", options{resolution: "1080p", compress: "neversee"}), filepath.Join(dir, "v-1080p-neversee.mp4"); got != want {
+	if got, want := a.describeJob(f, "video", options{resolution: "1080p", compress: "neversee"}).output, filepath.Join(dir, "v-1080p-neversee.mp4"); got != want {
 		t.Errorf("tagged video = %q, want %q", got, want)
 	}
 
 	// hevc output lands in an mp4 container
-	if got, want := wouldProduce(f, "video", options{videoFmt: "hevc"}), filepath.Join(dir, "v-compressed.mp4"); got != want {
+	if got, want := a.describeJob(f, "video", options{videoFmt: "hevc"}).output, filepath.Join(dir, "v-compressed.mp4"); got != want {
 		t.Errorf("hevc = %q, want %q", got, want)
 	}
 
 	// speed targets tag the output name
-	if got, want := wouldProduce(f, "video", options{speed: "x5"}), filepath.Join(dir, "v-x5.mp4"); got != want {
+	if got, want := a.describeJob(f, "video", options{speed: "x5"}).output, filepath.Join(dir, "v-x5.mp4"); got != want {
 		t.Errorf("video speed = %q, want %q", got, want)
 	}
-	if got, want := wouldProduce(f, "video", options{speed: "x0.1", compress: "spacesaver"}), filepath.Join(dir, "v-x0.1-spacesaver.mp4"); got != want {
+	if got, want := a.describeJob(f, "video", options{speed: "x0.1", compress: "spacesaver"}).output, filepath.Join(dir, "v-x0.1-spacesaver.mp4"); got != want {
 		t.Errorf("video speed + level = %q, want %q", got, want)
 	}
-	if got, want := wouldProduce(filepath.Join(dir, "s.mp3"), "audio", options{speed: "x2.5"}), filepath.Join(dir, "s-x2.5.mp3"); got != want {
+	if got, want := a.describeJob(filepath.Join(dir, "s.mp3"), "audio", options{speed: "x2.5"}).output, filepath.Join(dir, "s-x2.5.mp3"); got != want {
 		t.Errorf("audio speed = %q, want %q", got, want)
 	}
 
 	// image and audio defaults
-	if got, want := wouldProduce(filepath.Join(dir, "p.png"), "image", options{}), filepath.Join(dir, "p-compressed.jpg"); got != want {
+	if got, want := a.describeJob(filepath.Join(dir, "p.png"), "image", options{}).output, filepath.Join(dir, "p-compressed.jpg"); got != want {
 		t.Errorf("image default = %q, want %q", got, want)
 	}
-	if got, want := wouldProduce(filepath.Join(dir, "s.mp3"), "audio", options{}), filepath.Join(dir, "s-compressed.mp3"); got != want {
+	if got, want := a.describeJob(filepath.Join(dir, "s.mp3"), "audio", options{}).output, filepath.Join(dir, "s-compressed.mp3"); got != want {
 		t.Errorf("audio default = %q, want %q", got, want)
 	}
 }
@@ -134,26 +136,9 @@ func TestLooksConverted(t *testing.T) {
 	}
 }
 
-func TestWorthRevisit(t *testing.T) {
-	// an explicit level always squeezes, whatever the file is called:
-	// name detection must never override a direct user request
-	if !worthRevisit("whatever.mp4", options{compress: "compress"}) {
-		t.Error("an explicit level should always revisit a converted-looking file")
-	}
-	if !worthRevisit("whatever.mp4", options{compress: "neversee"}) {
-		t.Error("an explicit level should always revisit a converted-looking file")
-	}
-	// so does an explicit speed request
-	if !worthRevisit("whatever.mp4", options{speed: "x5"}) {
-		t.Error("an explicit speed should always revisit a converted-looking file")
-	}
-	// no level, speed or resolution: nothing this run would change
-	if worthRevisit("whatever.mp4", options{}) {
-		t.Error("no level, speed or resolution should not revisit")
-	}
-}
-
 func TestFindAndCountMediaFiles(t *testing.T) {
+	a := testApplication()
+
 	dir := t.TempDir()
 	write := func(rel string) {
 		if err := os.WriteFile(filepath.Join(dir, rel), []byte("x"), 0o644); err != nil {
@@ -172,12 +157,12 @@ func TestFindAndCountMediaFiles(t *testing.T) {
 	write(".hidden/d.mp4")
 
 	// non-recursive: top level only
-	if got := findMediaFiles(dir, false); len(got) != 1 || got[0] != filepath.Join(dir, "a.mp4") {
+	if got := a.findMediaFiles(dir, false); len(got) != 1 || got[0] != filepath.Join(dir, "a.mp4") {
 		t.Errorf("findMediaFiles(non-recursive) = %v", got)
 	}
 
 	// recursive: subfolders join in, hidden stay out
-	if got := findMediaFiles(dir, true); len(got) != 2 {
+	if got := a.findMediaFiles(dir, true); len(got) != 2 {
 		t.Errorf("findMediaFiles(recursive) = %v, want 2 files", got)
 	}
 

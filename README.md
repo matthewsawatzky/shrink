@@ -164,9 +164,9 @@ Outputs are written next to the input, and existing files are never overwritten 
 - Give one format per media kind (e.g. `jpeg mp4 mp3`); each applies only to matching files. With no formats, each kind uses its default.
 - `-r` walks subfolders too; hidden files and folders are always skipped.
 - `-j N` encodes N files at once (default `2`).
-- Re-running is safe: files whose output already exists, or that look like earlier shrink output, are skipped. `-o` redoes them.
+- Re-running skips verified outputs that match the requested codec, container and size. Explicit format changes are honored, including on earlier shrink outputs. `-o` redoes outputs.
 - `-n` shows exactly what a run would do, without writing anything.
-- `-d` deletes each original once a smaller replacement exists (compressed or rescaled same-kind outputs only).
+- `-d` deletes each original once a smaller, verified replacement exists (compressed or rescaled same-kind outputs only). If auxiliary streams would be lost, the original is kept.
 
 ### Doctor
 
@@ -221,10 +221,15 @@ Videos include a sine soundtrack, so audio paths get tested too. `-n` previews t
 | Image | `.jpg` `.jpeg` `.png` `.webp` `.gif` `.bmp` `.tiff` `.heic` `.heif` `.avif` |
 | Audio | `.mp3` `.aac` `.m4a` `.opus` `.ogg` `.wav` `.flac` `.wma` `.aiff` |
 
+Animated images are currently rejected so compression cannot silently flatten an animation or delete its original. Still GIF/WebP images remain supported.
+
+Outputs are encoded to temporary files, verified, then published. Failed or cancelled encodes remove their temporary output; `-o` preserves an existing destination until its replacement succeeds.
+
 ### Flags
 
 | Flag | Description |
 |------|-------------|
+| `-h`, `--help` | show usage and exit |
 | `-m`, `--machine` | emit one JSON document on stdout instead of human output ([schema](docs/machine.md)) |
 | `-v`, `--verbose` | show per-step timings, and use ms and KB everywhere |
 | `-r`, `--recursive` | with a folder, also scan subfolders |
@@ -235,6 +240,8 @@ Videos include a sine soundtrack, so audio paths get tested too. `-n` previews t
 | `-d`, `--delete` | delete the original once a smaller replacement exists (same-kind targets only) |
 | `-c`, `--completions SHELL` | print shell completions for `zsh` or `bash` and exit |
 | `-V`, `--version` | print the version and exit |
+
+Use `--` before filenames beginning with `-`. Flags that do not apply to a command produce an error.
 
 ### Exit codes
 
@@ -253,7 +260,7 @@ shrink --completions bash > /usr/local/etc/bash_completion.d/shrink
 
 ## Contributing
 
-Building, testing, and releasing are covered in [CONTRIBUTING.md](CONTRIBUTING.md).
+Building, testing, versioning, and releasing are covered in [CONTRIBUTING.md](CONTRIBUTING.md). See [CHANGELOG.md](CHANGELOG.md) for release changes.
 
 ## Credits
 

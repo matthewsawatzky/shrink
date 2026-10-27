@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,14 +116,14 @@ func parseMakeDuration(s string) (float64, bool) {
 		return 0, false
 	}
 	num, err := strconv.ParseFloat(s[:len(s)-1], 64)
-	if err != nil || num <= 0 {
+	if err != nil || num <= 0 || math.IsNaN(num) || math.IsInf(num, 0) {
 		return 0, false
 	}
 	switch s[len(s)-1] {
 	case 's':
 		return num, true
 	case 'm':
-		return num * 60, true
+		return num * 60, !math.IsInf(num*60, 0)
 	}
 	return 0, false
 }
@@ -280,19 +280,19 @@ func makePictureSource(content string, w, h, fps int) (source string, filters []
 }
 
 // makeOutput claims a descriptive name in the current directory.
-func makeOutput(s makeSpec) string {
+func (a *application) makeOutput(s makeSpec) string {
 	s = s.resolve()
 	dir, err := os.Getwd()
 	if err != nil {
 		dir = "."
 	}
-	return claimOutput(dir, s.name(), outExt(s.kind, s.format))
+	return a.claimOutput(dir, s.name(), outExt(s.kind, s.format))
 }
 
 // makeVideo generates a test video with the same codec and level
 // machinery normal encodes use, plus a sine soundtrack so audio paths
 // get exercised too.
-func makeVideo(s makeSpec) (*fileReport, error) {
+func (a *application) makeVideo(s makeSpec) (*fileReport, error) {
 	s = s.resolve()
 	levels := compressionLevels[coalesce(s.level, "compress")]
 	vf := videoFormats[s.format]
@@ -315,18 +315,17 @@ func makeVideo(s makeSpec) (*fileReport, error) {
 		args = append(args, "-c:a", "libopus", "-b:a", levels.audioBitrate)
 	}
 
-	out := makeOutput(s)
-	args = append(args, out)
+	out := a.makeOutput(s)
 
-	took, err := runFFmpegWithDuration("making", dur, args...)
+	took, err := a.encodeJob(picture, out, "making", dur, args)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(picture, "video", out, took, "make"), nil
+	return a.finishJob(picture, "video", out, took, "make"), nil
 }
 
 // makeImage generates a single-frame test image.
-func makeImage(s makeSpec) (*fileReport, error) {
+func (a *application) makeImage(s makeSpec) (*fileReport, error) {
 	s = s.resolve()
 	levels := compressionLevels[coalesce(s.level, "compress")]
 	img := imageFormats[s.format]
@@ -337,18 +336,18 @@ func makeImage(s makeSpec) (*fileReport, error) {
 	args = append(args, filters...)
 	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
 
-	out := makeOutput(s)
-	args = append(args, "-frames:v", "1", out)
+	out := a.makeOutput(s)
+	args = append(args, "-frames:v", "1")
 
-	took, err := runFFmpegWithDuration("making", 0.1, args...)
+	took, err := a.encodeJob(picture, out, "making", 0, args)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(picture, "image", out, took, "make"), nil
+	return a.finishJob(picture, "image", out, took, "make"), nil
 }
 
 // makeAudio generates a test tone or noise track.
-func makeAudio(s makeSpec) (*fileReport, error) {
+func (a *application) makeAudio(s makeSpec) (*fileReport, error) {
 	s = s.resolve()
 	levels := compressionLevels[coalesce(s.level, "compress")]
 	af := audioFormats[s.format]
@@ -365,14 +364,13 @@ func makeAudio(s makeSpec) (*fileReport, error) {
 	args := []string{"-f", "lavfi", "-i", source, "-t", durString(dur), "-c:a", af.codec}
 	args = append(args, audioEncodeArgs(af.codec, levels)...)
 
-	out := makeOutput(s)
-	args = append(args, out)
+	out := a.makeOutput(s)
 
-	took, err := runFFmpegWithDuration("making", dur, args...)
+	took, err := a.encodeJob(source, out, "making", dur, args)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
-	return finishJob(source, "audio", out, took, "make"), nil
+	return a.finishJob(source, "audio", out, took, "make"), nil
 }
 
 // makeTargetWords lists the make-specific completion words.
@@ -385,40 +383,43 @@ func makeTargetWords() []string {
 }
 
 // runMake generates test media in the current directory.
-func runMake(args []string) {
-	requireDeps()
+func (a *application) runMake(args []string) {
+	a.requireDeps()
 	spec, err := parseMakeTargets(args)
 	if err != nil {
-		exitError("%v", err)
+		a.exitError("%v", err)
 	}
 
-	if dryRun {
+	if a.dryRun {
 		s := spec.resolve()
-		dir, _ := os.Getwd()
-		out := filepath.Join(dir, s.name()+"."+outExt(s.kind, s.format))
-		if machine {
-			machineFiles = append(machineFiles, machineFile{Input: "(generated)", Output: out, Kind: s.kind})
-			machineDryRun = true
-			emitMachineOutput("", false, nil, 0, 1)
+		out := a.makeOutput(s)
+		if a.machine {
+			a.machineFiles = append(a.machineFiles, machineFile{Input: "(generated)", Output: out, Kind: s.kind})
+			a.machineDryRun = true
+			a.emitMachineOutput("", false, nil, 0, 1)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s dry run: would generate %s\n", doneMark(), ui.bold(out))
+		fmt.Fprintf(a.stderr, "%s dry run: would generate %s\n", a.doneMark(), a.ui.bold(out))
 		return
 	}
 
 	start := time.Now()
+	var rep *fileReport
 	switch spec.kind {
 	case "image":
-		_, err = makeImage(spec)
+		rep, err = a.makeImage(spec)
 	case "audio":
-		_, err = makeAudio(spec)
+		rep, err = a.makeAudio(spec)
 	default:
-		_, err = makeVideo(spec)
+		rep, err = a.makeVideo(spec)
 	}
 	if err != nil {
-		exitError("%v", err)
+		a.exitError("%v", err)
 	}
-	if machine {
-		emitMachineOutput("", false, nil, time.Since(start), -1)
+	if a.machine {
+		a.recordMachineFile(rep)
+		a.emitMachineOutput("", false, nil, time.Since(start), -1)
+	} else {
+		rep.print()
 	}
 }

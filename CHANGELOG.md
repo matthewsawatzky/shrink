@@ -1,0 +1,45 @@
+# Changelog
+
+Each release records its user-visible changes here. GitHub release notes are
+extracted from the matching dated section by `scripts/release-notes.sh`.
+Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## [Unreleased]
+
+## [1.0.0] - 2026-10-27
+
+### Added
+
+- A shared job planner for previews, output names, folder reruns and encoding.
+- Command and format registries to make new tools and formats easier to add.
+- Per-invocation application state and a testable CLI boundary.
+- Regression tests for output safety, cancellation, format changes and stream preservation.
+- A version policy, maintained changelog and release tooling that requires matching release notes.
+
+### Changed
+
+- Encodes write to temporary files, verify the result, and publish only after success.
+- Folder runs validate existing outputs against the requested codec, container, size and duration.
+- Rescaling uses the shared quality settings and honours hardware-encoder preference.
+- Video conversion preserves all audio tracks; original deletion checks for lost auxiliary streams.
+- CLI parsing supports `--help`, literal filenames after `--`, and command-specific flag validation.
+- Release tags must pass the shared CI checks before publishing. Both installers require SHA-256 verification.
+
+### Fixed
+
+- Default folder reruns repeatedly encoding originals and creating duplicate outputs.
+- Format requests being skipped for earlier shrink outputs, including MP4-to-MKV conversion.
+- Infinite or NaN speed factors passing validation and potentially hanging.
+- Failed encodes leaving partial files that later runs treated as completed outputs.
+- Cancellation leaving partial outputs created after the cleanup check.
+- Failed overwrites replacing existing destinations, and concurrent output publication clobbering files.
+- The special rescale path lowering audio quality and bypassing hardware preference.
+- Animated image compression flattening animations and permitting deletion of their originals.
+
+### Compatibility notes
+
+- Animated images are now rejected with a clear error and their originals retained. Still images remain supported.
+- Flags that do not apply to a command now produce an error instead of being silently ignored.
+- In machine output, `kind` consistently describes the output media kind, including extracted audio.
+
+Earlier releases retain their notes in the [GitHub release history](https://github.com/matthewsawatzky/shrink/releases).

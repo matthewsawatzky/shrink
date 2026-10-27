@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -36,21 +35,22 @@ type doctorReport struct {
 
 // encoderTargets maps each encoder shrink can use to the targets it
 // enables, in stable display order.
-var encoderTargets = []struct{ encoder, targets string }{
-	{"libx264", "mp4, mkv, mov, avi"},
-	{"libx265", "hevc"},
-	{"libvpx-vp9", "webm"},
-	{"libsvtav1", "av1"},
-	{"mjpeg", "jpeg"},
-	{"png", "png"},
-	{"libwebp", "webp"},
-	{"gif", "gif"},
-	{"libmp3lame", "mp3"},
-	{"aac", "aac, m4a"},
-	{"libopus", "opus, webm audio"},
-	{"libvorbis", "ogg"},
-	{"flac", "flac"},
-	{"pcm_s16le", "wav"},
+func encoderTargets() []struct{ encoder, targets string } {
+	groups := map[string][]string{}
+	for _, kind := range mediaKinds {
+		for _, name := range outputFormats(kind) {
+			f := formatsForKind(kind)[name]
+			groups[f.codec] = append(groups[f.codec], name)
+			if f.audioCodec != "" {
+				groups[f.audioCodec] = append(groups[f.audioCodec], name+" audio")
+			}
+		}
+	}
+	var result []struct{ encoder, targets string }
+	for _, encoder := range sortedKeys(groups) {
+		result = append(result, struct{ encoder, targets string }{encoder, strings.Join(groups[encoder], ", ")})
+	}
+	return result
 }
 
 // ffmpegInstallHint names the command that installs ffmpeg on this
@@ -83,14 +83,14 @@ func ffmpegInstallHint() string {
 
 // toolVersion reports whether a dependency binary exists and, when it
 // does, its first version line.
-func toolVersion(bin string) doctorTool {
+func (a *application) toolVersion(bin string) doctorTool {
 	t := doctorTool{}
 	if _, err := exec.LookPath(bin); err != nil {
 		t.Note = "not found on PATH"
 		return t
 	}
 	t.Available = true
-	if out, err := exec.Command(bin, "-version").Output(); err == nil {
+	if out, err := a.command(bin, "-version").Output(); err == nil {
 		if i := strings.IndexByte(string(out), '\n'); i > 0 {
 			t.Version = strings.TrimSpace(string(out[:i]))
 		}
@@ -101,7 +101,7 @@ func toolVersion(bin string) doctorTool {
 // requireDeps exits with one clear message when ffmpeg or ffprobe are
 // missing: every operation needs both, and failing later would only
 // surface as a confusing per-file error.
-func requireDeps() {
+func (a *application) requireDeps() {
 	var missing []string
 	for _, dep := range []string{"ffmpeg", "ffprobe"} {
 		if _, err := exec.LookPath(dep); err != nil {
@@ -112,29 +112,29 @@ func requireDeps() {
 		return
 	}
 	what := strings.Join(missing, " and ")
-	if machine {
-		exitMachineError(machineError{
+	if a.machine {
+		a.exitMachineError(machineError{
 			Error:       "shrink needs " + what + " on PATH - not found",
 			Suggestions: []string{"shrink doctor lists what is installed and what is missing"},
 		})
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red("shrink needs "+what+" on PATH - not found"))
-	fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("install: "+ffmpegInstallHint()))
-	fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("shrink doctor lists what is installed and what is missing"))
-	os.Exit(1)
+	fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red("shrink needs "+what+" on PATH - not found"))
+	fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("install: "+ffmpegInstallHint()))
+	fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("shrink doctor lists what is installed and what is missing"))
+	exitCLI(1)
 }
 
 // doctorMark renders a checklist entry: glyphs when styled, plain words
 // when piped or color-disabled.
-func doctorMark(ok bool) string {
+func (a *application) doctorMark(ok bool) string {
 	if ok {
-		if ui.on {
-			return ui.green("✓")
+		if a.ui.on {
+			return a.ui.green("✓")
 		}
 		return "ok:"
 	}
-	if ui.on {
-		return ui.red("✗")
+	if a.ui.on {
+		return a.ui.red("✗")
 	}
 	return "missing:"
 }
@@ -143,12 +143,12 @@ func doctorMark(ok bool) string {
 // core tools, every encoder behind a target, and hardware (-f) support.
 // Exits 0 when the core tools are present (missing optional encoders
 // are reported, not fatal), 1 when they are not.
-func runDoctor() {
+func (a *application) runDoctor() {
 	report := doctorReport{
 		Version:  version,
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,
-		FFmpeg:   toolVersion("ffmpeg"),
-		FFprobe:  toolVersion("ffprobe"),
+		FFmpeg:   a.toolVersion("ffmpeg"),
+		FFprobe:  a.toolVersion("ffprobe"),
 	}
 	report.OK = report.FFmpeg.Available && report.FFprobe.Available
 	if !report.FFmpeg.Available {
@@ -156,9 +156,9 @@ func runDoctor() {
 	}
 
 	if report.FFmpeg.Available {
-		avail := ffmpegEncoders()
+		avail := a.ffmpegEncoders()
 		report.Encoders = map[string]bool{}
-		for _, e := range encoderTargets {
+		for _, e := range encoderTargets() {
 			report.Encoders[e.encoder] = avail[e.encoder]
 			if !avail[e.encoder] {
 				report.Missing = append(report.Missing, e.targets)
@@ -174,40 +174,40 @@ func runDoctor() {
 		}
 	}
 
-	if machine {
-		printJSON(report)
+	if a.machine {
+		a.printJSON(report)
 		if !report.OK {
-			os.Exit(1)
+			exitCLI(1)
 		}
-		os.Exit(0)
+		exitCLI(0)
 	}
 
-	fmt.Fprintf(os.Stderr, "shrink %s doctor - %s\n\n", version, report.Platform)
-	fmt.Fprintf(os.Stderr, "  %-8s %-14s %s\n", doctorMark(report.FFmpeg.Available), "ffmpeg", report.FFmpeg.Version+report.FFmpeg.Note)
-	fmt.Fprintf(os.Stderr, "  %-8s %-14s %s\n", doctorMark(report.FFprobe.Available), "ffprobe", report.FFprobe.Version+report.FFprobe.Note)
+	fmt.Fprintf(a.stderr, "shrink %s doctor - %s\n\n", version, report.Platform)
+	fmt.Fprintf(a.stderr, "  %-8s %-14s %s\n", a.doctorMark(report.FFmpeg.Available), "ffmpeg", report.FFmpeg.Version+report.FFmpeg.Note)
+	fmt.Fprintf(a.stderr, "  %-8s %-14s %s\n", a.doctorMark(report.FFprobe.Available), "ffprobe", report.FFprobe.Version+report.FFprobe.Note)
 	if report.FFmpeg.Available {
-		fmt.Fprintf(os.Stderr, "\n")
-		for _, e := range encoderTargets {
+		fmt.Fprintf(a.stderr, "\n")
+		for _, e := range encoderTargets() {
 			line := e.targets
 			if !report.Encoders[e.encoder] {
-				line = ui.red(e.targets + " unavailable")
+				line = a.ui.red(e.targets + " unavailable")
 			}
-			fmt.Fprintf(os.Stderr, "  %-8s %-14s %s\n", doctorMark(report.Encoders[e.encoder]), e.encoder, line)
+			fmt.Fprintf(a.stderr, "  %-8s %-14s %s\n", a.doctorMark(report.Encoders[e.encoder]), e.encoder, line)
 		}
-		fmt.Fprintf(os.Stderr, "\n")
-		fmt.Fprintf(os.Stderr, "  %-8s %-14s %s\n", doctorMark(report.Hardware.Available), "hardware (-f)", report.Hardware.Note)
+		fmt.Fprintf(a.stderr, "\n")
+		fmt.Fprintf(a.stderr, "  %-8s %-14s %s\n", a.doctorMark(report.Hardware.Available), "hardware (-f)", report.Hardware.Note)
 	}
-	fmt.Fprintf(os.Stderr, "\n")
+	fmt.Fprintf(a.stderr, "\n")
 
 	if !report.OK {
-		fmt.Fprintf(os.Stderr, "%s shrink is not ready - install ffmpeg (it ships ffprobe)\n", errMark())
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("install: "+ffmpegInstallHint()))
-		os.Exit(1)
+		fmt.Fprintf(a.stderr, "%s shrink is not ready - install ffmpeg (it ships ffprobe)\n", a.errMark())
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("install: "+ffmpegInstallHint()))
+		exitCLI(1)
 	}
 	if len(report.Missing) > 0 {
-		fmt.Fprintf(os.Stderr, "%s %d target groups unavailable: %s\n",
-			ui.yellow("!"), len(report.Missing), ui.yellow(strings.Join(report.Missing, "; ")))
+		fmt.Fprintf(a.stderr, "%s %d target groups unavailable: %s\n",
+			a.ui.yellow("!"), len(report.Missing), a.ui.yellow(strings.Join(report.Missing, "; ")))
 	}
-	fmt.Fprintf(os.Stderr, "%s shrink is ready\n", doneMark())
-	os.Exit(0)
+	fmt.Fprintf(a.stderr, "%s shrink is ready\n", a.doneMark())
+	exitCLI(0)
 }

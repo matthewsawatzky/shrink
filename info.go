@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -53,8 +51,8 @@ const durationMismatchThreshold = 0.01
 // probeInfo runs a rich ffprobe on path and returns structured metadata.
 // It is separate from probeFile because info needs width, fps, frame
 // count, sample rate and channels, which the compression path does not.
-func probeInfo(path string) (fileInfo, error) {
-	cmd := exec.Command("ffprobe", "-v", "error",
+func (a *application) probeInfo(path string) (fileInfo, error) {
+	cmd := a.command("ffprobe", "-v", "error",
 		"-show_entries", "format=format_name,duration,bit_rate,size:stream=index,codec_type,codec_name,width,height,avg_frame_rate,nb_frames,duration,sample_rate,channels",
 		"-of", "json", path)
 	var stderr strings.Builder
@@ -63,12 +61,12 @@ func probeInfo(path string) (fileInfo, error) {
 	if err != nil {
 		return fileInfo{}, fmt.Errorf("ffprobe failed: %s", strings.TrimSpace(stderr.String()))
 	}
-	return parseProbeInfo(path, out)
+	return a.parseProbeInfo(path, out)
 }
 
 // parseProbeInfo turns ffprobe JSON into a fileInfo. It is split out so
 // tests can feed it fixed probe output without spawning ffmpeg.
-func parseProbeInfo(path string, data []byte) (fileInfo, error) {
+func (a *application) parseProbeInfo(path string, data []byte) (fileInfo, error) {
 	var probe struct {
 		Format struct {
 			Name     string `json:"format_name"`
@@ -158,7 +156,7 @@ func parseProbeInfo(path string, data []byte) (fileInfo, error) {
 			if diff := abs(s.Duration-info.Format.Duration) / info.Format.Duration; diff > durationMismatchThreshold {
 				info.Warnings = append(info.Warnings, fmt.Sprintf(
 					"%s stream duration (%s) differs from container duration (%s)",
-					s.Type, humanDuration(s.Duration), humanDuration(info.Format.Duration)))
+					s.Type, a.humanDuration(s.Duration), a.humanDuration(info.Format.Duration)))
 			}
 		}
 	}
@@ -208,81 +206,81 @@ func abs(x float64) float64 {
 }
 
 // runInfo handles the "shrink info <file>..." subcommand.
-func runInfo(paths []string) {
+func (a *application) runInfo(paths []string) {
 	if len(paths) == 0 {
-		exitError("info needs a file, e.g. shrink info clip.mp4")
+		a.exitError("info needs a file, e.g. shrink info clip.mp4")
 	}
 
-	requireDeps()
+	a.requireDeps()
 
 	var infos []fileInfo
 	for _, path := range paths {
-		info, err := probeInfo(path)
+		info, err := a.probeInfo(path)
 		if err != nil {
-			if machine {
-				exitMachineError(machineError{Error: err.Error(), Input: path})
+			if a.machine {
+				a.exitMachineError(machineError{Error: err.Error(), Input: path})
 			}
-			fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(fmt.Sprintf("%s: %v", path, err)))
-			os.Exit(1)
+			fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(fmt.Sprintf("%s: %v", path, err)))
+			exitCLI(1)
 		}
 		infos = append(infos, info)
 	}
 
-	if machine {
-		printJSON(infos)
+	if a.machine {
+		a.printJSON(infos)
 		return
 	}
 
 	for i, info := range infos {
 		if i > 0 {
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(a.stderr)
 		}
-		printFileInfo(info)
+		a.printFileInfo(info)
 	}
 }
 
 // printFileInfo renders one fileInfo in the tool's compact style.
-func printFileInfo(info fileInfo) {
-	fmt.Fprintf(os.Stderr, "%s\n", ui.bold(filepath.Base(info.Path)))
+func (a *application) printFileInfo(info fileInfo) {
+	fmt.Fprintf(a.stderr, "%s\n", a.ui.bold(filepath.Base(info.Path)))
 
 	ext := info.Format.Extension
 	if ext == "" {
 		ext = "none"
 	}
-	fmt.Fprintf(os.Stderr, "  %s .%s", ui.dim("extension:"), ext)
+	fmt.Fprintf(a.stderr, "  %s .%s", a.ui.dim("extension:"), ext)
 	if info.Format.AllNames != "" {
-		fmt.Fprintf(os.Stderr, "  %s %s", ui.dim("container:"), info.Format.AllNames)
+		fmt.Fprintf(a.stderr, "  %s %s", a.ui.dim("container:"), info.Format.AllNames)
 	}
 	if !info.Format.MatchOK && info.Format.Extension != "" {
-		fmt.Fprintf(os.Stderr, "  %s", ui.yellow("(mismatch)"))
+		fmt.Fprintf(a.stderr, "  %s", a.ui.yellow("(mismatch)"))
 	}
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(a.stderr)
 
 	meta := []string{info.Kind}
 	if info.Format.Size > 0 {
-		meta = append(meta, humanSize(info.Format.Size))
+		meta = append(meta, a.humanSize(info.Format.Size))
 	}
 	if info.Format.BitRate > 0 {
 		meta = append(meta, humanBitRate(info.Format.BitRate))
 	}
-	fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim("type:"), strings.Join(meta, " · "))
+	fmt.Fprintf(a.stderr, "  %s %s\n", a.ui.dim("type:"), strings.Join(meta, " · "))
 
 	if info.Format.Duration > 0 {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim("duration:"), humanDuration(info.Format.Duration))
+		fmt.Fprintf(a.stderr, "  %s %s\n", a.ui.dim("duration:"), a.humanDuration(info.Format.Duration))
 	}
 
 	for _, s := range info.Streams {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim("stream"), formatStream(s))
+		fmt.Fprintf(a.stderr, "  %s %s\n", a.ui.dim("stream"), a.formatStream(s))
 	}
 
 	for _, w := range info.Warnings {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", ui.yellow("!"), ui.yellow(w))
+		fmt.Fprintf(a.stderr, "  %s %s\n", a.ui.yellow("!"), a.ui.yellow(w))
 	}
 }
 
 // formatStream turns a streamInfo into a one-line human summary.
-func formatStream(s streamInfo) string {
-	parts := []string{ui.cyan(s.Type + ":"), ui.bold(s.Codec)}
+func (a *application) formatStream(s streamInfo) string {
+	parts := []string{a.ui.cyan(s.Type + ":"), a.ui.bold(s.Codec)}
 	if s.Width > 0 && s.Height > 0 {
 		parts = append(parts, fmt.Sprintf("%d×%d", s.Width, s.Height))
 	}
@@ -299,7 +297,7 @@ func formatStream(s streamInfo) string {
 		parts = append(parts, fmt.Sprintf("%d frames", s.Frames))
 	}
 	if s.Duration > 0 {
-		parts = append(parts, humanDuration(s.Duration))
+		parts = append(parts, a.humanDuration(s.Duration))
 	}
 	return strings.Join(parts, "  ")
 }

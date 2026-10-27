@@ -62,7 +62,7 @@ shrink folder ~/Media jpeg mp4 mp3 -m -j 4 | jq '.summary'
 |-------|------|-------|
 | `input` | string | input path |
 | `output` | string | output path |
-| `kind` | string | `video`, `image`, or `audio` |
+| `kind` | string | output media kind: `video`, `image`, or `audio` |
 | `operation` | string | `compress`, `rescale`, `extract_audio`, or `grab_frame` |
 | `input_bytes` / `output_bytes` | int | sizes used for the savings figure |
 | `savings_percent` | float | `(1 - out/in) * 100`, two decimals |

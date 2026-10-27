@@ -2,49 +2,30 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"sync"
 	"time"
 )
 
-// verbose enables -v/--verbose mode: every duration is reported in ms, every
-// size in KB, and each stage of a run logs how long it took.
-var verbose bool
-
-// progStart anchors the "total" line in the verbose step list.
-var progStart = time.Now()
-
-// step is one timed stage of a run, logged together at the end.
 type step struct {
 	name string
 	dur  time.Duration
 }
 
-// Steps are recorded per input file, so parallel batch runs can never
-// mix one file's timings into another's report.
-var (
-	stepsMu     sync.Mutex
-	stepsByFile = map[string][]step{}
-)
-
-// trackStep starts timing a named stage of one input. The returned
-// function stops the clock; outside verbose/machine mode it is a no-op.
-func trackStep(input, name string) func() {
-	if !verbose && !machine {
+func (a *application) trackStep(input, name string) func() {
+	if !a.verbose && !a.machine {
 		return func() {}
 	}
 	start := time.Now()
-	return func() { recordStep(input, name, time.Since(start)) }
+	return func() { a.recordStep(input, name, time.Since(start)) }
 }
 
 // recordStep appends a completed stage to its input's step list.
-func recordStep(input, name string, d time.Duration) {
-	if !verbose && !machine {
+func (a *application) recordStep(input, name string, d time.Duration) {
+	if !a.verbose && !a.machine {
 		return
 	}
-	stepsMu.Lock()
-	stepsByFile[input] = append(stepsByFile[input], step{name, d})
-	stepsMu.Unlock()
+	a.stepsMu.Lock()
+	a.stepsByFile[input] = append(a.stepsByFile[input], step{name, d})
+	a.stepsMu.Unlock()
 }
 
 // formatMS renders a duration in whole milliseconds, verbose's only unit.
@@ -56,14 +37,14 @@ func formatMS(d time.Duration) string {
 // plus the total wall time, and clears them. Batch runs skip the total
 // label because their summary line already reports whole-run time.
 // Machine mode carries the steps in its JSON instead.
-func printStepsFor(input string) {
-	if machine || !verbose {
+func (a *application) printStepsFor(input string) {
+	if a.machine || !a.verbose {
 		return
 	}
-	stepsMu.Lock()
-	steps := stepsByFile[input]
-	delete(stepsByFile, input)
-	stepsMu.Unlock()
+	a.stepsMu.Lock()
+	steps := a.stepsByFile[input]
+	delete(a.stepsByFile, input)
+	a.stepsMu.Unlock()
 	if len(steps) == 0 {
 		return
 	}
@@ -74,11 +55,11 @@ func printStepsFor(input string) {
 		}
 	}
 	for _, s := range steps {
-		fmt.Fprintf(os.Stderr, "  %s %s  %s\n",
-			ui.dim("·"), ui.dim(fmt.Sprintf("%-*s", width, s.name)), formatMS(s.dur))
+		fmt.Fprintf(a.stderr, "  %s %s  %s\n",
+			a.ui.dim("·"), a.ui.dim(fmt.Sprintf("%-*s", width, s.name)), formatMS(s.dur))
 	}
-	if !batchMode {
-		fmt.Fprintf(os.Stderr, "  %s %s  %s\n",
-			ui.dim("·"), ui.dim(fmt.Sprintf("%-*s", width, "total")), ui.bold(formatMS(time.Since(progStart))))
+	if !a.batchMode {
+		fmt.Fprintf(a.stderr, "  %s %s  %s\n",
+			a.ui.dim("·"), a.ui.dim(fmt.Sprintf("%-*s", width, "total")), a.ui.bold(formatMS(time.Since(a.progStart))))
 	}
 }

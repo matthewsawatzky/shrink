@@ -3,15 +3,8 @@ package main
 import (
 	"encoding/json"
 	"math"
-	"os"
-	"sync"
 	"time"
 )
-
-// machine enables -m/--machine: one JSON document on stdout instead of the
-// human-facing output, for scripts and LLMs. Progress and status text are
-// suppressed; failures come back as {"error": ...} with exit code 1.
-var machine bool
 
 type machineStep struct {
 	Name string `json:"name"`
@@ -72,30 +65,8 @@ type machineError struct {
 	Suggestions  []string `json:"suggestions,omitempty"`
 }
 
-// machineFiles collects per-file results for the final document. The
-// mutex guards appends from parallel batch workers.
-var (
-	machineFiles   []machineFile
-	machineFilesMu sync.Mutex
-)
-
-// machineSkipped counts files passed over because their kind had no target.
-var machineSkipped = map[string]int{}
-
-// machineDryRun marks the document as a -n preview: entries are what
-// would happen, nothing was encoded.
-var machineDryRun bool
-
-// machineNote carries an optional human-readable note on the document,
-// e.g. why a run did nothing.
-var machineNote string
-
-// machineAlreadyDone counts files skipped because their output already
-// existed (re-run with -o to redo them).
-var machineAlreadyDone int
-
-func printJSON(v interface{}) {
-	enc := json.NewEncoder(os.Stdout)
+func (a *application) printJSON(v interface{}) {
+	enc := json.NewEncoder(a.stdout)
 	enc.SetIndent("", "  ")
 	enc.Encode(v)
 }
@@ -103,14 +74,14 @@ func printJSON(v interface{}) {
 // exitMachineError emits a structured error and exits 1. Errors stay out of
 // stdout's normal output path only in the sense that a run produces either
 // results or an error - never both.
-func exitMachineError(e machineError) {
-	printJSON(e)
-	os.Exit(1)
+func (a *application) exitMachineError(e machineError) {
+	a.printJSON(e)
+	exitCLI(1)
 }
 
 // emitMachineOutput prints the final document for a completed run.
-func emitMachineOutput(folder string, recursive bool, failures []machineFailure, elapsed time.Duration, processedOverride int) {
-	files := machineFiles
+func (a *application) emitMachineOutput(folder string, recursive bool, failures []machineFailure, elapsed time.Duration, processedOverride int) {
+	files := a.machineFiles
 	if files == nil {
 		files = []machineFile{}
 	}
@@ -139,35 +110,35 @@ func emitMachineOutput(folder string, recursive bool, failures []machineFailure,
 	if inTotal > 0 {
 		sum.SavingsPercent = round2((1 - float64(outTotal)/float64(inTotal)) * 100)
 	}
-	for _, n := range machineSkipped {
+	for _, n := range a.machineSkipped {
 		sum.Skipped += n
 	}
-	sum.Skipped += machineAlreadyDone
+	sum.Skipped += a.machineAlreadyDone
 
 	out := machineOutput{
 		Version:     version,
-		DryRun:      machineDryRun,
-		Note:        machineNote,
+		DryRun:      a.machineDryRun,
+		Note:        a.machineNote,
 		Folder:      folder,
 		Recursive:   recursive,
 		Files:       files,
 		Failed:      failures,
-		AlreadyDone: machineAlreadyDone,
+		AlreadyDone: a.machineAlreadyDone,
 		Summary:     sum,
 	}
-	if len(machineSkipped) > 0 {
-		out.Skipped = machineSkipped
+	if len(a.machineSkipped) > 0 {
+		out.Skipped = a.machineSkipped
 	}
-	printJSON(out)
+	a.printJSON(out)
 }
 
 // machineStepsFor converts an input's recorded step timings and clears
 // them, so each file carries its own breakdown.
-func machineStepsFor(input string) []machineStep {
-	stepsMu.Lock()
-	steps := stepsByFile[input]
-	delete(stepsByFile, input)
-	stepsMu.Unlock()
+func (a *application) machineStepsFor(input string) []machineStep {
+	a.stepsMu.Lock()
+	steps := a.stepsByFile[input]
+	delete(a.stepsByFile, input)
+	a.stepsMu.Unlock()
 	if len(steps) == 0 {
 		return nil
 	}

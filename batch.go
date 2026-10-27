@@ -3,26 +3,22 @@ package main
 import (
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// batchMode suppresses the per-file "total" step line, since the batch
-// summary reports wall time for the whole run.
-var batchMode bool
-
 // findMediaFiles collects media files under dir in sorted order. Recursion
 // is opt-in; hidden entries are skipped. Unreadable entries are noted and
 // skipped rather than aborting the scan.
-func findMediaFiles(dir string, recursive bool) []string {
+func (a *application) findMediaFiles(dir string, recursive bool) []string {
 	var files []string
 	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s %s\n", ui.yellow("!"), ui.dim("cannot read "+path))
+			fmt.Fprintf(a.stderr, "%s %s\n", a.ui.yellow("!"), a.ui.dim("cannot read "+path))
 			return nil
 		}
 		if path != dir && strings.HasPrefix(d.Name(), ".") {
@@ -98,7 +94,8 @@ func kindAllowed(kind string, o options) bool {
 type batchWork struct {
 	path string
 	out  string
-	opts options
+	plan jobPlan
+	err  error
 }
 
 // perKindOpts narrows the parsed targets to the one format that applies
@@ -124,6 +121,11 @@ func perKindOpts(kind string, o options) options {
 // Camera-style names (IMG_1234) never match: the tags use dashes.
 func looksConverted(path string) bool {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if i := strings.LastIndexByte(base, '-'); i >= 0 {
+		if n, err := strconv.Atoi(base[i+1:]); err == nil && n > 0 {
+			base = base[:i]
+		}
+	}
 	for _, suffix := range []string{
 		"-compressed", "-compress", "-spacesaver", "-neversee", "-frame", "-audio",
 	} {
@@ -131,7 +133,7 @@ func looksConverted(path string) bool {
 			return true
 		}
 	}
-	for _, res := range sortedKeys(resolutions) {
+	for res := range resolutions {
 		if strings.HasSuffix(base, "-"+res) {
 			return true
 		}
@@ -145,42 +147,6 @@ func looksConverted(path string) bool {
 	return false
 }
 
-// worthRevisit reports whether a converted-looking file deserves another
-// pass: an explicit level squeezes it further, a speed target re-times
-// it, or a resolution target would genuinely downscale it.
-func worthRevisit(f string, o options) bool {
-	if o.compress != "" || o.speed != "" {
-		return true
-	}
-	if o.resolution == "" {
-		return false
-	}
-	return probeFile(f).height > resHeight(o.resolution)
-}
-
-// wouldProduce names the output a run would make for f, mirroring
-// processOne's routing, without encoding or bumping collision counters.
-// o must already be narrowed to f's kind (see perKindOpts).
-func wouldProduce(f, kind string, o options) string {
-	dir := filepath.Dir(f)
-	switch kind {
-	case "video":
-		switch {
-		case o.audioFmt != "":
-			return filepath.Join(dir, candidateBase(f, "audio", o.audioFmt, "audio", "", o.compress, o.speed)+"."+outExt("audio", o.audioFmt))
-		case o.imageFmt != "":
-			return filepath.Join(dir, candidateBase(f, "image", o.imageFmt, "frame", o.resolution, o.compress, "")+"."+outExt("image", o.imageFmt))
-		default:
-			return filepath.Join(dir, candidateBase(f, "video", coalesce(o.videoFmt, "mp4"), "", o.resolution, o.compress, o.speed)+"."+outExt("video", coalesce(o.videoFmt, "mp4")))
-		}
-	case "image":
-		return filepath.Join(dir, candidateBase(f, "image", coalesce(o.imageFmt, "jpeg"), "", o.resolution, o.compress, "")+"."+outExt("image", coalesce(o.imageFmt, "jpeg")))
-	case "audio":
-		return filepath.Join(dir, candidateBase(f, "audio", coalesce(o.audioFmt, "mp3"), "", "", o.compress, o.speed)+"."+outExt("audio", coalesce(o.audioFmt, "mp3")))
-	}
-	return ""
-}
-
 // batchProcess compresses every eligible media file in dir and prints a
 // one-line summary (or a JSON document in machine mode). Format targets
 // only apply to their own kind, so videos are untouched by "mp3". With
@@ -188,22 +154,22 @@ func wouldProduce(f, kind string, o options) string {
 // completes so output stays in input order, and a single shared
 // progress line covers every in-flight encode. Files whose output
 // already exists are skipped unless -o is given.
-func batchProcess(dir string, o options, recursive bool, jobs int) {
-	batchMode = true
+func (a *application) batchProcess(dir string, o options, recursive bool, jobs int) {
+	a.batchMode = true
 	start := time.Now()
 
-	files := findMediaFiles(dir, recursive)
+	files := a.findMediaFiles(dir, recursive)
 	if len(files) == 0 {
-		if machine {
-			exitMachineError(machineError{Error: "no media files found in " + dir})
+		if a.machine {
+			a.exitMachineError(machineError{Error: "no media files found in " + dir})
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red("no media files found in "+dir))
+		fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red("no media files found in "+dir))
 		if !recursive {
 			if n := countMediaFiles(dir); n > 0 {
-				fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d found in subfolders - re-run with -r", n)))
+				fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim(fmt.Sprintf("%d found in subfolders - re-run with -r", n)))
 			}
 		}
-		os.Exit(1)
+		exitCLI(1)
 	}
 
 	// collect the worklist up front: skips are counted before anything
@@ -211,31 +177,42 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 	var work []batchWork
 	skipped := map[string]int{}
 	alreadyDone := 0
+	// Inspect each eligible source once, reusing metadata in workers. An
+	// output belonging to another source in this scan is never a fresh input.
+	plans := map[string]jobPlan{}
+	errors := map[string]error{}
+	completed := map[string]bool{}
+	generated := map[string]bool{}
+	for _, f := range files {
+		if !kindAllowed(detectKind(f), o) {
+			continue
+		}
+		p, err := a.planJob(f, perKindOpts(detectKind(f), o))
+		plans[f], errors[f] = p, err
+		completed[f] = err == nil && !a.overwrite && p.existingResult()
+		if completed[f] {
+			generated[p.output] = true
+		}
+	}
 	for _, f := range files {
 		kind := detectKind(f)
 		if !kindAllowed(kind, o) {
 			skipped[kind]++
 			continue
 		}
-		fileOpts := perKindOpts(kind, o)
-		out := wouldProduce(f, kind, fileOpts)
-		// an output from an earlier run means there is nothing to do
-		if !overwrite && fileExists(out) {
+		p, err := plans[f], errors[f]
+		if !a.overwrite && (generated[f] || (err == nil && (p.noop || completed[f]))) {
 			alreadyDone++
 			continue
 		}
-		// so does a file that already looks like one of our outputs -
-		// unless this run would genuinely rescale it, or a level
-		// explicitly squeezes it further
-		if !overwrite && looksConverted(f) && !worthRevisit(f, o) {
-			alreadyDone++
-			continue
+		if err == nil {
+			p.reserve()
 		}
-		work = append(work, batchWork{path: f, out: out, opts: fileOpts})
+		work = append(work, batchWork{path: f, out: p.output, plan: p, err: err})
 	}
 
-	if dryRun {
-		reportDryRun(dir, recursive, work, skipped, alreadyDone)
+	if a.dryRun {
+		a.reportDryRun(dir, recursive, work, skipped, alreadyDone)
 		return
 	}
 
@@ -246,8 +223,8 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 	if workers < 1 {
 		workers = 1
 	}
-	parallel = workers > 1
-	parallelTTY = parallel && !machine && isTerminal(os.Stderr)
+	a.parallel = workers > 1
+	a.parallelTTY = a.parallel && !a.machine && writerIsTerminal(a.stderr)
 
 	type batchResult struct {
 		rep *fileReport
@@ -255,13 +232,13 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 	}
 	results := make([]batchResult, len(work))
 
-	if parallel {
+	if a.parallel {
 		// worker pool: each goroutine takes files from idx until it
 		// closes; results land in their slot, so accounting below
 		// stays in input order however jobs finish
-		if parallelTTY {
-			liveBatch.begin(len(work))
-			fmt.Fprint(os.Stderr, "\033[?25l") // hide cursor for the shared line
+		if a.parallelTTY {
+			a.liveBatch.begin(len(work))
+			fmt.Fprint(a.stderr, "\033[?25l") // hide cursor for the shared line
 		}
 		idx := make(chan int)
 		var wg sync.WaitGroup
@@ -270,14 +247,14 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 			go func() {
 				defer wg.Done()
 				for i := range idx {
-					if interrupted.Load() {
+					if a.ctx.Err() != nil {
 						results[i].err = errCancelled
 						continue
 					}
-					rep, err := processOne(work[i].path, work[i].opts)
+					rep, err := executeWork(work[i])
 					results[i].rep, results[i].err = rep, err
-					if parallelTTY {
-						liveBatch.complete(err == nil)
+					if a.parallelTTY {
+						a.liveBatch.complete(err == nil)
 					}
 				}
 			}()
@@ -289,19 +266,19 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 		wg.Wait()
 	} else {
 		for i := range work {
-			rep, err := processOne(work[i].path, work[i].opts)
+			rep, err := executeWork(work[i])
 			results[i].rep, results[i].err = rep, err
-			if err != nil && !machine && !interrupted.Load() {
-				fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(failMsg(work[i].path, err)))
+			if err != nil && !a.machine && a.ctx.Err() == nil {
+				fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(failMsg(work[i].path, err)))
 			}
 		}
 	}
-	if interrupted.Load() {
-		select {} // the interrupt handler is cleaning up and exiting
+	if a.ctx.Err() != nil {
+		return // every active child has stopped and cleaned its temporary output
 	}
-	if parallelTTY {
-		liveBatch.clear()
-		fmt.Fprint(os.Stderr, "\033[?25h")
+	if a.parallelTTY {
+		a.liveBatch.clear()
+		fmt.Fprint(a.stderr, "\033[?25h")
 	}
 
 	var processed, failed, deleted int
@@ -318,12 +295,15 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 			failed++
 			msg := failMsg(work[i].path, r.err)
 			failures = append(failures, machineFailure{Input: work[i].path, Error: msg})
-			if !machine && parallel {
-				fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(msg))
+			if !a.machine && a.parallel {
+				fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(msg))
 			}
 			continue
 		}
 		processed++
+		if a.machine {
+			a.recordMachineFile(r.rep)
+		}
 		if r.rep.statOK {
 			inTotal += r.rep.inBytes
 			outTotal += r.rep.outBytes
@@ -331,68 +311,61 @@ func batchProcess(dir string, o options, recursive bool, jobs int) {
 		if r.rep.deleted {
 			deleted++
 		}
-		if !machine && parallel {
+		if !a.machine {
 			r.rep.print() // held back during the run; report in input order
 		}
 	}
 
-	if machine {
-		if parallel {
-			// workers finish in arbitrary order; restore input order so
-			// repeated runs of the same folder diff cleanly
-			order := make(map[string]int, len(work))
-			for i := range work {
-				order[work[i].path] = i
-			}
-			machineFilesMu.Lock()
-			sort.SliceStable(machineFiles, func(a, b int) bool {
-				return order[machineFiles[a].Input] < order[machineFiles[b].Input]
-			})
-			machineFilesMu.Unlock()
-		}
-		machineSkipped = skipped
-		machineAlreadyDone = alreadyDone
-		emitMachineOutput(dir, recursive, failures, time.Since(start), processed)
+	if a.machine {
+
+		a.machineSkipped = skipped
+		a.machineAlreadyDone = alreadyDone
+		a.emitMachineOutput(dir, recursive, failures, time.Since(start), processed)
 		if failed > 0 {
-			os.Exit(1)
+			exitCLI(1)
 		}
 		return
 	}
 
-	printBatchSummary(processed, failed, skipped, inTotal, outTotal, time.Since(start))
+	a.printBatchSummary(processed, failed, skipped, inTotal, outTotal, time.Since(start))
 	if deleted > 0 {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d originals deleted", deleted)))
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim(fmt.Sprintf("%d originals deleted", deleted)))
 	}
 	if alreadyDone > 0 {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
 			alreadyDone, filesWord(alreadyDone))))
 	}
 	if failed > 0 {
-		os.Exit(1)
+		exitCLI(1)
 	}
 }
 
 // reportDryRun prints what a batch would do without encoding anything.
-func reportDryRun(dir string, recursive bool, work []batchWork, skipped map[string]int, alreadyDone int) {
-	if machine {
-		for _, w := range work {
-			machineFiles = append(machineFiles, machineFile{Input: w.path, Output: w.out, Kind: detectKind(w.path)})
+func (a *application) reportDryRun(dir string, recursive bool, work []batchWork, skipped map[string]int, alreadyDone int) {
+	for _, w := range work {
+		if w.err != nil {
+			a.exitError("%v", w.err)
 		}
-		machineDryRun = true
-		machineSkipped = skipped
-		machineAlreadyDone = alreadyDone
-		emitMachineOutput(dir, recursive, nil, 0, len(work))
+	}
+	if a.machine {
+		for _, w := range work {
+			a.machineFiles = append(a.machineFiles, machineFile{Input: w.path, Output: w.out, Kind: detectKind(w.path)})
+		}
+		a.machineDryRun = true
+		a.machineSkipped = skipped
+		a.machineAlreadyDone = alreadyDone
+		a.emitMachineOutput(dir, recursive, nil, 0, len(work))
 		return
 	}
 	for _, w := range work {
-		fmt.Fprintf(os.Stderr, "would compress %s -> %s\n", ui.cyan(w.path), ui.bold(w.out))
+		fmt.Fprintf(a.stderr, "would compress %s -> %s\n", a.ui.cyan(w.path), a.ui.bold(w.out))
 	}
-	fmt.Fprintf(os.Stderr, "%s dry run: %d %s, nothing written\n", doneMark(), len(work), filesWord(len(work)))
-	if deleteAfter {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("originals will be deleted after each successful compression"))
+	fmt.Fprintf(a.stderr, "%s dry run: %d %s, nothing written\n", a.doneMark(), len(work), filesWord(len(work)))
+	if a.deleteAfter {
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("originals will be deleted after each successful compression"))
 	}
 	if alreadyDone > 0 {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim(fmt.Sprintf("%d %s already converted (or already look converted) - re-run with -o to redo them",
 			alreadyDone, filesWord(alreadyDone))))
 	}
 	var skippedTotal int
@@ -404,7 +377,7 @@ func reportDryRun(dir string, recursive bool, work []batchWork, skipped map[stri
 		}
 	}
 	if skippedTotal > 0 {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("would skip %d %s (%s) - targets apply to matching files only",
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim(fmt.Sprintf("would skip %d %s (%s) - targets apply to matching files only",
 			skippedTotal, filesWord(skippedTotal), strings.Join(breakdown, ", "))))
 	}
 }
@@ -419,10 +392,10 @@ func failMsg(path string, err error) string {
 	return msg
 }
 
-func printBatchSummary(processed, failed int, skipped map[string]int, inTotal, outTotal int64, elapsed time.Duration) {
-	mark := doneMark()
+func (a *application) printBatchSummary(processed, failed int, skipped map[string]int, inTotal, outTotal int64, elapsed time.Duration) {
+	mark := a.doneMark()
 	if failed > 0 {
-		mark = errMark()
+		mark = a.errMark()
 	}
 	line := fmt.Sprintf("%d %s", processed, filesWord(processed))
 	if failed > 0 {
@@ -430,9 +403,9 @@ func printBatchSummary(processed, failed int, skipped map[string]int, inTotal, o
 	}
 	if inTotal > 0 {
 		line += fmt.Sprintf("  (%s → %s)  %s",
-			humanSize(inTotal), humanSize(outTotal), savingsText(inTotal, outTotal))
+			a.humanSize(inTotal), a.humanSize(outTotal), a.savingsText(inTotal, outTotal))
 	}
-	fmt.Fprintf(os.Stderr, "%s %s  %s\n", mark, line, ui.dim("took "+humanDuration(elapsed.Seconds())))
+	fmt.Fprintf(a.stderr, "%s %s  %s\n", mark, line, a.ui.dim("took "+a.humanDuration(elapsed.Seconds())))
 
 	var skippedTotal int
 	var breakdown []string
@@ -443,7 +416,7 @@ func printBatchSummary(processed, failed int, skipped map[string]int, inTotal, o
 		}
 	}
 	if skippedTotal > 0 {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim(fmt.Sprintf("skipped %d %s (%s) - targets apply to matching files only",
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim(fmt.Sprintf("skipped %d %s (%s) - targets apply to matching files only",
 			skippedTotal, filesWord(skippedTotal), strings.Join(breakdown, ", "))))
 	}
 }
@@ -453,4 +426,11 @@ func filesWord(n int) string {
 		return "file"
 	}
 	return "files"
+}
+
+func executeWork(w batchWork) (*fileReport, error) {
+	if w.err != nil {
+		return nil, w.err
+	}
+	return w.plan.execute()
 }

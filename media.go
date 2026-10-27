@@ -3,36 +3,20 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-// outputFileName builds the output name from what was actually done:
-//
-//	<original>-<operations>.<ext>
-//
-// Tags appear only for work that actually happened: an explicit resolution
-// (scaling), a speed factor (x5, x0.1), a cross-kind operation ("audio",
-// "frame"), or an explicit compression level. The format change itself
-// isn't tagged - the extension already shows it - so a plain re-encode or
-// conversion falls back to "-compressed". The extension always reflects
-// the true output format.
-func outputFileName(input, outKind, fmtName, operation, resolution, level, speed string) string {
-	stem := candidateBase(input, outKind, fmtName, operation, resolution, level, speed)
-	return claimOutput(filepath.Dir(input), stem, outExt(outKind, fmtName))
-}
-
 // claimOutput reserves stem.ext in dir, bumping a counter when the name
 // is taken (an existing file, or a claim made earlier this run).
-func claimOutput(dir, stem, ext string) string {
+func (a *application) claimOutput(dir, stem, ext string) string {
 	out := filepath.Join(dir, stem+"."+ext)
-	for i := 1; !reserveOut(out); i++ {
+	for i := 1; !a.reserveOut(out); i++ {
 		out = filepath.Join(dir, fmt.Sprintf("%s-%d.%s", stem, i, ext))
 	}
 	return out
@@ -40,7 +24,7 @@ func claimOutput(dir, stem, ext string) string {
 
 // candidateBase is the "<original>-<operations>" part of an output name,
 // without extension or directory.
-func candidateBase(input, outKind, fmtName, operation, resolution, level, speed string) string {
+func candidateBase(input, operation, resolution, level, speed string) string {
 	base := strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
 
 	var parts []string
@@ -90,6 +74,9 @@ func progressDuration(info mediaInfo, speed string) float64 {
 // single atempo only accepts 0.5 through 100, so factors outside that
 // range chain stages: x0.1 becomes atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8.
 func atempoChain(speed float64) string {
+	if speed <= 0 || math.IsNaN(speed) || math.IsInf(speed, 0) {
+		return ""
+	}
 	f := speed
 	var stages []string
 	for f < 0.5 {
@@ -106,46 +93,31 @@ func atempoChain(speed float64) string {
 
 // outExt maps a format target to the file extension it really produces
 // (hevc and av1 ride in mp4 containers; audio "aac" lands in .m4a).
-func outExt(outKind, fmtName string) string {
-	switch outKind {
-	case "image":
-		if f, ok := imageFormats[fmtName]; ok {
-			return f.ext
-		}
-	case "audio":
-		if f, ok := audioFormats[fmtName]; ok {
-			return f.ext
-		}
-	case "video":
-		if f, ok := videoFormats[fmtName]; ok && f.ext != "" {
-			return f.ext
-		}
+func outExt(kind, name string) string {
+	if f, ok := formatsForKind(kind)[name]; ok {
+		return f.ext
 	}
-	return fmtName
+	return name
 }
 
 // reservedOut tracks output paths handed out this run. Parallel workers
 // can pick names before ffmpeg has created the file (two inputs like
 // clip.mp4 + clip.mkv both map to clip-compressed.mp4), so a plain
 // fileExists check would race; reserving is check-and-set.
-var (
-	reservedMu  sync.Mutex
-	reservedOut = map[string]bool{}
-)
 
 // reserveOut claims path for this run. With -o it claims existing files
 // too (ffmpeg -y replaces them); otherwise a prior claim or an existing
 // file makes it unavailable.
-func reserveOut(path string) bool {
-	reservedMu.Lock()
-	defer reservedMu.Unlock()
-	if reservedOut[path] {
+func (a *application) reserveOut(path string) bool {
+	a.reservedMu.Lock()
+	defer a.reservedMu.Unlock()
+	if a.reservedOut[path] {
 		return false
 	}
-	if !overwrite && fileExists(path) {
+	if !a.overwrite && fileExists(path) {
 		return false
 	}
-	reservedOut[path] = true
+	a.reservedOut[path] = true
 	return true
 }
 
@@ -161,6 +133,9 @@ func fileExists(path string) bool {
 // call collects it all.
 type mediaInfo struct {
 	ok         bool
+	formatName string
+	frames     int64
+	streams    map[string]int
 	hasAudio   bool
 	hasVideo   bool
 	duration   float64
@@ -174,10 +149,13 @@ type mediaInfo struct {
 // (JSON) instead of one decode + two probe calls per file. A file that
 // ffprobe cannot read at all - wrong extension or garbage contents -
 // reports ok=false.
-func probeFile(path string) mediaInfo {
-	cmd := exec.Command("ffprobe", "-v", "error", "-show_entries",
-		"format=duration,bit_rate:stream=codec_type,codec_name,height",
-		"-of", "json", path)
+func (a *application) probeFile(path string) mediaInfo {
+	args := []string{"-v", "error", "-show_entries", "format=format_name,duration,bit_rate:stream=codec_type,codec_name,height,nb_read_frames", "-of", "json"}
+	if detectKind(path) == "image" {
+		args = append(args, "-count_frames", "-read_intervals", "%+#2")
+	}
+	args = append(args, "-i", path)
+	cmd := a.command("ffprobe", args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -186,6 +164,7 @@ func probeFile(path string) mediaInfo {
 	}
 	var probe struct {
 		Format struct {
+			Name     string `json:"format_name"`
 			Duration string `json:"duration"`
 			BitRate  string `json:"bit_rate"`
 		}
@@ -193,95 +172,75 @@ func probeFile(path string) mediaInfo {
 			CodecType string `json:"codec_type"`
 			CodecName string `json:"codec_name"`
 			Height    int    `json:"height"`
+			Frames    string `json:"nb_read_frames"`
 		}
 	}
 	if json.Unmarshal(out, &probe) != nil {
 		return mediaInfo{}
 	}
-	info := mediaInfo{ok: true}
+	info := mediaInfo{formatName: probe.Format.Name, streams: map[string]int{}}
 	for _, s := range probe.Streams {
+		info.streams[s.CodecType]++
+		if n, err := strconv.ParseInt(s.Frames, 10, 64); err == nil && n > info.frames {
+			info.frames = n
+		}
 		switch s.CodecType {
 		case "audio":
 			info.hasAudio = true
-			info.audioCodec = s.CodecName
+			if info.audioCodec == "" {
+				info.audioCodec = s.CodecName
+			}
 		case "video":
 			info.hasVideo = true
-			info.videoCodec = s.CodecName
+			if info.videoCodec == "" {
+				info.videoCodec = s.CodecName
+			}
 			if s.Height > info.height {
 				info.height = s.Height
 			}
 		}
 	}
-	if d, err := strconv.ParseFloat(strings.TrimSpace(probe.Format.Duration), 64); err == nil {
+	if d, err := strconv.ParseFloat(strings.TrimSpace(probe.Format.Duration), 64); err == nil && d >= 0 && !math.IsNaN(d) && !math.IsInf(d, 0) {
 		info.duration = d
 	}
 	if br, err := strconv.ParseInt(strings.TrimSpace(probe.Format.BitRate), 10, 64); err == nil && br > 0 {
 		info.bitRate = br
 	}
+	info.ok = info.hasAudio || info.hasVideo
 	return info
-}
-
-// probeDuration returns the input's duration in seconds via a single
-// ffprobe call; 0 if unknown (or the probe fails). Used by the progress
-// bar, which only needs the number.
-func probeDuration(path string) float64 {
-	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1", path).Output()
-	if err != nil {
-		return 0
-	}
-	if v, ok := atof(strings.TrimSpace(string(out))); ok {
-		return v
-	}
-	return 0
 }
 
 // humanSize renders a byte count in the unit that keeps it readable:
 // sub-megabyte files show as KB, everything else as MB. Verbose mode
 // always uses KB so sizes are directly comparable.
-func humanSize(b int64) string {
-	if verbose || b < 1024*1024 {
+func (a *application) humanSize(b int64) string {
+	if a.verbose || b < 1024*1024 {
 		return fmt.Sprintf("%.0fKB", float64(b)/1024)
 	}
 	return fmt.Sprintf("%.2fMB", float64(b)/1024/1024)
 }
 
-// sizeWarning reports when the "compressed" output ended up bigger than
-// the input, since that defeats the point of the tool.
-func sizeWarning(inPath, outPath string) string {
-	inSize, _ := os.Stat(inPath)
-	outSize, _ := os.Stat(outPath)
-	if inSize == nil || outSize == nil {
-		return ""
-	}
-	if outSize.Size() >= inSize.Size() {
-		return fmt.Sprintf("output is not smaller than input (%s > %s) - this format/settings combo gains nothing here",
-			humanSize(outSize.Size()), humanSize(inSize.Size()))
-	}
-	return ""
-}
-
 // savingsText renders the size delta as "↓ 62%" (or "↑ 4%" when the output
 // grew), colored green for a win and yellow when it gained nothing.
 // Plain arrows become -/+ in unstyled mode so piped logs stay ASCII.
-func savingsText(inBytes, outBytes int64) string {
+func (a *application) savingsText(inBytes, outBytes int64) string {
 	if inBytes <= 0 {
 		return ""
 	}
 	pct := int((1 - float64(outBytes)/float64(inBytes)) * 100)
 	arrow := "↓"
-	if !ui.on {
+	if !a.ui.on {
 		arrow = "-"
 	}
 	if pct >= 0 {
-		return ui.green(fmt.Sprintf("%s %d%%", arrow, pct))
+		return a.ui.green(fmt.Sprintf("%s %d%%", arrow, pct))
 	}
-	if !ui.on {
+	if !a.ui.on {
 		arrow = "+"
 	} else {
 		arrow = "↑"
 	}
-	return ui.yellow(fmt.Sprintf("%s %d%%", arrow, -pct))
+	return a.ui.yellow(fmt.Sprintf("%s %d%%", arrow, -pct))
 }
 
 // parseMissingEncoder pulls the encoder name out of ffmpeg's
@@ -318,21 +277,8 @@ func firstMeaningfulLine(stderr string) string {
 
 // ffmpegEncoders lists this build's encoders once per run, so -f can
 // check for hardware encoders without spawning ffmpeg every file.
-var ffmpegEncoders = sync.OnceValue(func() map[string]bool {
-	out, err := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
-	if err != nil {
-		return map[string]bool{}
-	}
-	avail := map[string]bool{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if f := strings.Fields(line); len(f) >= 2 {
-			avail[f[1]] = true
-		}
-	}
-	return avail
-})
 
-func encoderAvailable(name string) bool { return ffmpegEncoders()[name] }
+func (a *application) encoderAvailable(name string) bool { return a.ffmpegEncoders()[name] }
 
 // bitrateForLevel scales a source bitrate down to what the compression
 // level asks for, in kbps, with a floor so tiny sources don't turn to mud.
@@ -357,7 +303,7 @@ func bitrateForLevel(compress string, bitRate int64) int {
 // macOS (VideoToolbox) when -f asked for speed. Hardware encoders have
 // no CRF, so the args carry a bitrate derived from the source instead.
 // ok=false means no hardware route and software proceeds unchanged.
-func hwEncodeFor(codec, compress string, info mediaInfo) (string, []string, bool) {
+func (a *application) hwEncodeFor(codec, compress string, info mediaInfo) (string, []string, bool) {
 	if runtime.GOOS != "darwin" || info.bitRate <= 0 {
 		return "", nil, false
 	}
@@ -370,7 +316,7 @@ func hwEncodeFor(codec, compress string, info mediaInfo) (string, []string, bool
 	default:
 		return "", nil, false
 	}
-	if !encoderAvailable(hw) {
+	if !a.encoderAvailable(hw) {
 		return "", nil, false
 	}
 	return hw, []string{"-b:v", fmt.Sprintf("%dk", bitrateForLevel(compress, info.bitRate))}, true
@@ -392,88 +338,6 @@ func videoCRF(codec string, lv levelSpec) string {
 	return lv.videoCRF
 }
 
-func handleVideo(input string, resolution string, videoFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
-	if videoFmt == "" {
-		videoFmt = "mp4"
-	}
-	// an explicit level compresses; without one the run only performs the
-	// operations asked for, at a near-lossless grade
-	level := compress
-	levels := transparentLevel
-	grade := "transparent"
-	if compress != "" {
-		levels = compressionLevels[compress]
-		grade = compress
-	}
-	vf := videoFormats[videoFmt]
-
-	// -f: swap in the hardware encoder for x264/x265 targets when one
-	// exists, trading some efficiency for a much faster encode
-	codec, encArgs := vf.codec, vf.args
-	crf := videoCRF(codec, levels)
-	if fast {
-		if hw, hwArgs, ok := hwEncodeFor(codec, grade, info); ok {
-			codec = hw
-			if videoFmt == "mp4" || videoFmt == "mov" {
-				hwArgs = append(hwArgs, "-movflags", "+faststart")
-			}
-			encArgs = hwArgs
-			crf = ""
-		}
-	}
-
-	args := []string{"-i", input, "-c:v", codec}
-	if crf != "" {
-		args = append(args, "-crf", crf)
-	}
-	args = append(args, encArgs...)
-
-	switch {
-	// no compression requested, the source audio is aac and nothing
-	// needs to re-time it: copy the track through untouched
-	case compress == "" && speed == "" && videoFmt != "webm" && info.audioCodec == "aac":
-		args = append(args, "-c:a", "copy")
-	case videoFmt != "webm":
-		args = append(args, "-c:a", "aac", "-b:a", levels.audioBitrate)
-	default:
-		args = append(args, "-c:a", "libopus", "-b:a", levels.audioBitrate)
-	}
-
-	if resolution != "" || speed != "" {
-		var filters []string
-		if resolution != "" {
-			filters = append(filters, resolutions[resolution])
-		}
-		if speed != "" {
-			filters = append(filters, setptsFilter(speed))
-		}
-		args = append(args, "-vf", strings.Join(filters, ","))
-	}
-	if speed != "" && info.hasAudio {
-		v, _, _ := parseSpeed(speed)
-		args = append(args, "-af", atempoChain(v))
-	}
-
-	out := outputFileName(input, "video", videoFmt, "", resolution, level, speed)
-	args = append(args, out)
-
-	label := "compressing"
-	if compress == "" {
-		label = "converting"
-	}
-	if resolution != "" {
-		label += " + scaling"
-	}
-	if speed != "" {
-		label += " + speed"
-	}
-	took, err := runFFmpegWithDuration(label, progressDuration(info, speed), args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
-	}
-	return finishJob(input, "video", out, took, "compress"), nil
-}
-
 // imageCodecArgs builds the encoder flags for one still-image output,
 // shared by image-to-image and video frame grabs.
 func imageCodecArgs(codec, quality, webpQ string) []string {
@@ -487,73 +351,6 @@ func imageCodecArgs(codec, quality, webpQ string) []string {
 	default: // gif
 		return []string{"-c:v", "gif"}
 	}
-}
-
-func handleImage(input string, resolution string, imageFmt string, compress string) (*fileReport, error) {
-	if imageFmt == "" {
-		imageFmt = "jpeg"
-	}
-	levels := transparentLevel
-	if compress != "" {
-		levels = compressionLevels[compress]
-	}
-	img := imageFormats[imageFmt]
-
-	args := []string{"-i", input}
-	if resolution != "" {
-		args = append(args, "-vf", resolutions[resolution])
-	}
-	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
-
-	out := outputFileName(input, "image", imageFmt, "", resolution, compress, "")
-	args = append(args, "-frames:v", "1", out)
-
-	label := "compressing"
-	if compress == "" {
-		label = "converting"
-	}
-	if resolution != "" {
-		label += " + scaling"
-	}
-	took, err := runFFmpeg(label, args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
-	}
-	return finishJob(input, "image", out, took, "compress"), nil
-}
-
-func handleAudio(input string, audioFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
-	if audioFmt == "" {
-		audioFmt = "mp3"
-	}
-	levels := transparentLevel
-	if compress != "" {
-		levels = compressionLevels[compress]
-	}
-	af := audioFormats[audioFmt]
-
-	args := []string{"-i", input, "-c:a", af.codec}
-	args = append(args, audioEncodeArgs(af.codec, levels)...)
-	if speed != "" {
-		v, _, _ := parseSpeed(speed)
-		args = append(args, "-af", atempoChain(v))
-	}
-
-	out := outputFileName(input, "audio", audioFmt, "", "", compress, speed)
-	args = append(args, out)
-
-	label := "compressing"
-	if compress == "" {
-		label = "converting"
-	}
-	if speed != "" {
-		label += " + speed"
-	}
-	took, err := runFFmpegWithDuration(label, progressDuration(info, speed), args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
-	}
-	return finishJob(input, "audio", out, took, "compress"), nil
 }
 
 // audioEncodeArgs adds the quality settings for one audio codec at one
@@ -572,6 +369,7 @@ func audioEncodeArgs(codec string, levels levelSpec) []string {
 // fileReport is one finished job's outcome. Parallel batches hold
 // reports back and print them in input order once the run completes.
 type fileReport struct {
+	app       *application
 	input     string
 	out       string
 	kind      string
@@ -591,40 +389,40 @@ type fileReport struct {
 // warning, and this file's verbose step list.
 func (r *fileReport) print() {
 	if !r.statOK {
-		fmt.Fprintf(os.Stderr, "%s %s %s\n", doneMark(), ui.bold(r.out), ui.dim("took "+humanDuration(r.took.Seconds())))
-		printStepsFor(r.input)
+		fmt.Fprintf(r.app.stderr, "%s %s %s\n", r.app.doneMark(), r.app.ui.bold(r.out), r.app.ui.dim("took "+r.app.humanDuration(r.took.Seconds())))
+		r.app.printStepsFor(r.input)
 		return
 	}
 	if r.inBytes > 0 {
-		fmt.Fprintf(os.Stderr, "%s %s %s  %s  %s\n",
-			doneMark(), ui.bold(r.out),
-			ui.dim(fmt.Sprintf("(%s → %s)", humanSize(r.inBytes), humanSize(r.outBytes))),
-			savingsText(r.inBytes, r.outBytes),
-			ui.dim("took "+humanDuration(r.took.Seconds())))
+		fmt.Fprintf(r.app.stderr, "%s %s %s  %s  %s\n",
+			r.app.doneMark(), r.app.ui.bold(r.out),
+			r.app.ui.dim(fmt.Sprintf("(%s → %s)", r.app.humanSize(r.inBytes), r.app.humanSize(r.outBytes))),
+			r.app.savingsText(r.inBytes, r.outBytes),
+			r.app.ui.dim("took "+r.app.humanDuration(r.took.Seconds())))
 	} else {
-		fmt.Fprintf(os.Stderr, "%s %s %s\n", doneMark(), ui.bold(r.out), ui.dim("took "+humanDuration(r.took.Seconds())))
+		fmt.Fprintf(r.app.stderr, "%s %s %s\n", r.app.doneMark(), r.app.ui.bold(r.out), r.app.ui.dim("took "+r.app.humanDuration(r.took.Seconds())))
 	}
 	if r.warning != "" {
-		fmt.Fprintf(os.Stderr, "%s %s %s\n", ui.yellow("!"), ui.yellow("warning:"), r.warning)
+		fmt.Fprintf(r.app.stderr, "%s %s %s\n", r.app.ui.yellow("!"), r.app.ui.yellow("warning:"), r.warning)
 	}
 	if r.deleted {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("deleted original "+filepath.Base(r.input)))
-	} else if r.delNote != "" {
-		fmt.Fprintf(os.Stderr, "%s %s\n", ui.yellow("!"), ui.yellow(r.delNote))
+		fmt.Fprintf(r.app.stderr, "  %s\n", r.app.ui.dim("deleted original "+filepath.Base(r.input)))
 	}
-	printStepsFor(r.input)
+	if r.delNote != "" {
+		fmt.Fprintf(r.app.stderr, "%s %s\n", r.app.ui.yellow("!"), r.app.ui.yellow(r.delNote))
+	}
+	r.app.printStepsFor(r.input)
 }
 
-// finishJob records a completed job. Human mode prints the summary line
-// and verbose steps unless a parallel batch is collecting reports;
-// machine mode appends a JSON result for the final document.
-func finishJob(input, kind, out string, took time.Duration, operation string) *fileReport {
-	statDone := trackStep(input, "stat output")
+// finishJob builds a completed result and applies the verified deletion policy.
+// The command coordinator owns rendering and aggregation.
+func (a *application) finishJob(input, kind, out string, took time.Duration, operation string) *fileReport {
+	statDone := a.trackStep(input, "stat output")
 	inSize, _ := os.Stat(input)
 	outSize, err := os.Stat(out)
 	statDone()
 
-	r := &fileReport{
+	r := &fileReport{app: a,
 		input: input, out: out, kind: kind, operation: operation,
 		took: took, statOK: err == nil,
 	}
@@ -634,13 +432,15 @@ func finishJob(input, kind, out string, took time.Duration, operation string) *f
 	if err == nil && outSize != nil {
 		r.outBytes = outSize.Size()
 	}
-	r.warning = sizeWarning(input, out)
+	if inSize != nil && r.statOK && r.outBytes >= r.inBytes {
+		r.warning = fmt.Sprintf("output is not smaller than input (%s >= %s) - this format/settings combo gains nothing here", a.humanSize(r.outBytes), a.humanSize(r.inBytes))
+	}
 
 	// -d: remove the original once a smaller replacement exists. Derived
 	// outputs (audio tracks, frame grabs) never qualify, generated files
 	// have no original to remove, and neither does an "output" that
 	// didn't actually shrink.
-	if deleteAfter {
+	if a.deleteAfter {
 		switch {
 		case operation == "make":
 			// generated files have no original
@@ -648,6 +448,8 @@ func finishJob(input, kind, out string, took time.Duration, operation string) *f
 			r.delNote = "kept the original: this run made a derived file, not a compressed version"
 		case !r.statOK:
 			r.delNote = "kept the original: the output could not be verified"
+		case !a.replacementSafe(input, out):
+			r.delNote = "kept the original: the output does not preserve all required streams or frames"
 		case r.outBytes >= r.inBytes:
 			r.delNote = "kept the original: the output is not smaller"
 		default:
@@ -659,139 +461,25 @@ func finishJob(input, kind, out string, took time.Duration, operation string) *f
 		}
 	}
 
-	if machine {
-		f := machineFile{
-			Input: r.input, Output: r.out, Kind: r.kind, Operation: r.operation,
-			InputBytes: r.inBytes, OutputBytes: r.outBytes,
-			TookMS: r.took.Milliseconds(), Warning: r.warning, Steps: machineStepsFor(r.input),
-			DeletedInput: r.deleted,
-		}
-		if r.inBytes > 0 {
-			f.SavingsPercent = round2((1 - float64(r.outBytes)/float64(r.inBytes)) * 100)
-		}
-		machineFilesMu.Lock()
-		machineFiles = append(machineFiles, f)
-		machineFilesMu.Unlock()
-		return r
-	}
-
-	if !parallel {
-		r.print()
-	}
 	return r
 }
 
-// handleAudioFromVideo extracts the audio track of a video into its own
-// file, e.g. "shrink clip.mp4 mp3". A speed target rides along as an
-// atempo filter on the extracted track.
-func handleAudioFromVideo(input string, audioFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
-	levels := transparentLevel
-	if compress != "" {
-		levels = compressionLevels[compress]
+func (a *application) recordMachineFile(r *fileReport) {
+
+	f := machineFile{
+		Input: r.input, Output: r.out, Kind: r.kind, Operation: r.operation,
+		InputBytes: r.inBytes, OutputBytes: r.outBytes,
+		TookMS: r.took.Milliseconds(), Warning: r.warning, Steps: a.machineStepsFor(r.input),
+		DeletedInput: r.deleted,
 	}
-	af := audioFormats[audioFmt]
-
-	args := []string{"-i", input, "-vn", "-c:a", af.codec}
-	args = append(args, audioEncodeArgs(af.codec, levels)...)
-	if speed != "" {
-		v, _, _ := parseSpeed(speed)
-		args = append(args, "-af", atempoChain(v))
+	if r.operation == "make" {
+		f.Input = "(generated)"
 	}
-
-	out := outputFileName(input, "audio", audioFmt, "audio", "", compress, speed)
-	args = append(args, out)
-
-	took, err := runFFmpegWithDuration("extracting audio", progressDuration(info, speed), args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
+	if r.delNote != "" {
+		f.Warning = strings.TrimSpace(f.Warning + " " + r.delNote)
 	}
-	return finishJob(input, "video", out, took, "extract_audio"), nil
-}
-
-// handleVideoToImage grabs a single frame from a video, e.g.
-// "shrink clip.mp4 png". Resolution target scales the grabbed frame.
-func handleVideoToImage(input string, resolution string, imageFmt string, compress string, info mediaInfo) (*fileReport, error) {
-	levels := transparentLevel
-	if compress != "" {
-		levels = compressionLevels[compress]
+	if r.inBytes > 0 {
+		f.SavingsPercent = round2((1 - float64(r.outBytes)/float64(r.inBytes)) * 100)
 	}
-	img := imageFormats[imageFmt]
-
-	args := []string{"-i", input}
-	if resolution != "" {
-		args = append(args, "-vf", resolutions[resolution])
-	}
-	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
-
-	out := outputFileName(input, "image", imageFmt, "frame", resolution, compress, "")
-	args = append(args, "-frames:v", "1", "-update", "1", out)
-
-	took, err := runFFmpegWithDuration("grabbing frame", info.duration, args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
-	}
-	return finishJob(input, "image", out, took, "grab_frame"), nil
-}
-
-// transparentCRF is the near-lossless grade used when the only real work
-// is rescaling one of shrink's own outputs: compressing an already
-// compressed file again would stack losses for no gain.
-func transparentCRF(codec string) string {
-	switch codec {
-	case "libx265":
-		return "22"
-	case "libsvtav1":
-		return "30"
-	case "libvpx-vp9":
-		return "28"
-	}
-	return "18" // libx264 and anything unknown
-}
-
-// handleRescaleVideo downscales one of shrink's own outputs without
-// stacking another compression pass on it: the rescale encodes at a
-// near-lossless grade, and an AAC track is simply copied.
-func handleRescaleVideo(input string, resolution string, videoFmt string, info mediaInfo) (*fileReport, error) {
-	vf := videoFormats[videoFmt]
-
-	args := []string{"-i", input, "-c:v", vf.codec, "-crf", transparentCRF(vf.codec)}
-	args = append(args, vf.args...)
-	args = append(args, "-vf", resolutions[resolution])
-
-	switch {
-	case info.audioCodec == "aac" && videoFmt != "webm":
-		args = append(args, "-c:a", "copy")
-	case videoFmt != "webm":
-		args = append(args, "-c:a", "aac", "-b:a", compressionLevels["compress"].audioBitrate)
-	default:
-		args = append(args, "-c:a", "libopus", "-b:a", compressionLevels["compress"].audioBitrate)
-	}
-
-	out := outputFileName(input, "video", videoFmt, "", resolution, "", "")
-	args = append(args, out)
-
-	took, err := runFFmpegWithDuration("downscaling", info.duration, args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
-	}
-	return finishJob(input, "video", out, took, "rescale"), nil
-}
-
-// handleRescaleImage downscales an already-compressed image at a
-// near-lossless quality instead of compressing it twice.
-func handleRescaleImage(input string, resolution string, imageFmt string) (*fileReport, error) {
-	img := imageFormats[imageFmt]
-
-	args := []string{"-i", input}
-	args = append(args, "-vf", resolutions[resolution])
-	args = append(args, imageCodecArgs(img.codec, "2", "95")...)
-
-	out := outputFileName(input, "image", imageFmt, "", resolution, "", "")
-	args = append(args, "-frames:v", "1", out)
-
-	took, err := runFFmpeg("downscaling", args...)
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg failed: %v", err)
-	}
-	return finishJob(input, "image", out, took, "rescale"), nil
+	a.machineFiles = append(a.machineFiles, f)
 }

@@ -45,20 +45,19 @@ curl -fsSL -o "$tmp/$asset" "$url" ||
 	die "download failed - $VERSION may not have a $os/$arch build"
 
 # --- verify against the release checksums ---
-checksums=$(curl -fsSL "https://github.com/$REPO/releases/download/$VERSION/shrink-$VERSION-checksums.txt" 2>/dev/null || true)
-if [ -n "$checksums" ]; then
-	want=$(printf '%s\n' "$checksums" | grep "$asset" | cut -d' ' -f1)
-	if command -v sha256sum >/dev/null 2>&1; then
-		got=$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
-	elif command -v shasum >/dev/null 2>&1; then
-		got=$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)
-	else
-		got=""
-	fi
-	if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
-		die "checksum mismatch - the download may be corrupted, try again"
-	fi
+checksums=$(curl -fsSL "https://github.com/$REPO/releases/download/$VERSION/shrink-$VERSION-checksums.txt") ||
+ die "could not download release checksums - nothing installed"
+want=$(printf '%s\n' "$checksums" | awk -v name="$asset" '$2 == name { print $1 }')
+[ "${#want}" -eq 64 ] || die "missing or invalid checksum for $asset"
+case "$want" in *[!0-9a-fA-F]*) die "invalid checksum for $asset" ;; esac
+if command -v sha256sum >/dev/null 2>&1; then
+ got=$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
+elif command -v shasum >/dev/null 2>&1; then
+ got=$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)
+else
+ die "SHA-256 verification needs sha256sum or shasum - nothing installed"
 fi
+[ "$want" = "$got" ] || die "checksum mismatch - the download may be corrupted, try again"
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 

@@ -8,12 +8,12 @@ import (
 
 // resetNaming clears the reservation table and overwrite flag so each
 // test starts with clean naming state.
-func resetNaming(t *testing.T) {
+func (a *application) resetNaming(t *testing.T) {
 	t.Helper()
-	reservedMu.Lock()
-	reservedOut = map[string]bool{}
-	reservedMu.Unlock()
-	overwrite = false
+	a.reservedMu.Lock()
+	a.reservedOut = map[string]bool{}
+	a.reservedMu.Unlock()
+	a.overwrite = false
 }
 
 func TestCandidateBase(t *testing.T) {
@@ -30,7 +30,7 @@ func TestCandidateBase(t *testing.T) {
 		{"/d/clip.mov", "audio", "mp3", "audio", "", "", "x2", "clip-x2-audio"},
 	}
 	for _, c := range cases {
-		got := candidateBase(c.input, c.outKind, c.fmtName, c.operation, c.resolution, c.level, c.speed)
+		got := candidateBase(c.input, c.operation, c.resolution, c.level, c.speed)
 		if got != c.want {
 			t.Errorf("candidateBase(%q...) = %q, want %q", c.input, got, c.want)
 		}
@@ -56,7 +56,9 @@ func TestOutExt(t *testing.T) {
 	}
 }
 
-func TestOutputFileName(t *testing.T) {
+func TestClaimOutput(t *testing.T) {
+	a := testApplication()
+
 	dir := t.TempDir()
 	input := filepath.Join(dir, "a.mp4")
 	if err := os.WriteFile(input, []byte("x"), 0o644); err != nil {
@@ -64,43 +66,43 @@ func TestOutputFileName(t *testing.T) {
 	}
 
 	// fresh name
-	resetNaming(t)
-	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	a.resetNaming(t)
+	if got := a.claimOutput(dir, "a-compressed", "mp4"); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("fresh output = %q", got)
 	}
 
 	// an existing output bumps the counter
-	resetNaming(t)
+	a.resetNaming(t)
 	if err := os.WriteFile(filepath.Join(dir, "a-compressed.mp4"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed-1.mp4") {
+	if got := a.claimOutput(dir, "a-compressed", "mp4"); got != filepath.Join(dir, "a-compressed-1.mp4") {
 		t.Errorf("collision should bump the counter, got %q", got)
 	}
 
 	// -o claims the existing name instead of bumping
-	resetNaming(t)
-	overwrite = true
-	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	a.resetNaming(t)
+	a.overwrite = true
+	if got := a.claimOutput(dir, "a-compressed", "mp4"); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("overwrite should claim the existing name, got %q", got)
 	}
-	overwrite = false
+	a.overwrite = false
 
 	// two claims in the same run can't share a name
-	resetNaming(t)
+	a.resetNaming(t)
 	if err := os.Remove(filepath.Join(dir, "a-compressed.mp4")); err != nil {
 		t.Fatal(err)
 	}
-	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	if got := a.claimOutput(dir, "a-compressed", "mp4"); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("first claim = %q", got)
 	}
-	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed-1.mp4") {
+	if got := a.claimOutput(dir, "a-compressed", "mp4"); got != filepath.Join(dir, "a-compressed-1.mp4") {
 		t.Errorf("second claim should bump, got %q", got)
 	}
 
 	// tags and format-aware extensions
-	resetNaming(t)
-	if got := outputFileName(input, "video", "hevc", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	a.resetNaming(t)
+	if got := a.claimOutput(dir, "a-compressed", "mp4"); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("hevc output should use the mp4 extension, got %q", got)
 	}
 }
@@ -120,21 +122,6 @@ func TestBitrateForLevel(t *testing.T) {
 	for _, c := range cases {
 		if got := bitrateForLevel(c.compress, c.bitRate); got != c.want {
 			t.Errorf("bitrateForLevel(%q, %d) = %d, want %d", c.compress, c.bitRate, got, c.want)
-		}
-	}
-}
-
-func TestTransparentCRF(t *testing.T) {
-	cases := []struct{ codec, want string }{
-		{"libx264", "18"},
-		{"libx265", "22"},
-		{"libsvtav1", "30"},
-		{"libvpx-vp9", "28"},
-		{"something-else", "18"},
-	}
-	for _, c := range cases {
-		if got := transparentCRF(c.codec); got != c.want {
-			t.Errorf("transparentCRF(%q) = %q, want %q", c.codec, got, c.want)
 		}
 	}
 }
@@ -160,29 +147,33 @@ func TestFirstMeaningfulLine(t *testing.T) {
 }
 
 func TestHumanSize(t *testing.T) {
-	verbose = false
-	if got := humanSize(2048); got != "2KB" {
+	a := testApplication()
+
+	a.verbose = false
+	if got := a.humanSize(2048); got != "2KB" {
 		t.Errorf("humanSize(2048) = %q, want 2KB", got)
 	}
-	if got := humanSize(5 * 1024 * 1024); got != "5.00MB" {
+	if got := a.humanSize(5 * 1024 * 1024); got != "5.00MB" {
 		t.Errorf("humanSize(5MB) = %q, want 5.00MB", got)
 	}
-	verbose = true
-	if got := humanSize(1024 * 1024); got != "1024KB" {
+	a.verbose = true
+	if got := a.humanSize(1024 * 1024); got != "1024KB" {
 		t.Errorf("verbose humanSize(1MB) = %q, want 1024KB", got)
 	}
-	verbose = false
+	a.verbose = false
 }
 
 func TestSavingsText(t *testing.T) {
+	a := testApplication()
+
 	// unstyled output (pipes) uses plain +/- arrows
-	if got := savingsText(100, 25); got != "- 75%" {
+	if got := a.savingsText(100, 25); got != "- 75%" {
 		t.Errorf("savingsText(100,25) = %q, want \"- 75%%\"", got)
 	}
-	if got := savingsText(100, 125); got != "+ 25%" {
+	if got := a.savingsText(100, 125); got != "+ 25%" {
 		t.Errorf("savingsText(100,125) = %q, want \"+ 25%%\"", got)
 	}
-	if got := savingsText(0, 10); got != "" {
+	if got := a.savingsText(0, 10); got != "" {
 		t.Errorf("savingsText(0,10) = %q, want empty", got)
 	}
 }

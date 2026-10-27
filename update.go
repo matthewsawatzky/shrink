@@ -45,9 +45,9 @@ type machineUpdate struct {
 
 // downloadFile fetches url, capping the read so a bad URL can't stream
 // forever (release tarballs are a couple of megabytes).
-func downloadFile(url string) ([]byte, error) {
+func (a *application) downloadFile(url string) ([]byte, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(a.ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -76,8 +76,8 @@ func parseRelease(body []byte) (ghRelease, error) {
 }
 
 // fetchLatestRelease asks GitHub for the newest published release.
-func fetchLatestRelease() (ghRelease, error) {
-	body, err := downloadFile(updateAPI + "/releases/latest")
+func (a *application) fetchLatestRelease() (ghRelease, error) {
+	body, err := a.downloadFile(updateAPI + "/releases/latest")
 	if err != nil {
 		return ghRelease{}, err
 	}
@@ -143,12 +143,12 @@ func extractBinary(tarball []byte) ([]byte, error) {
 // brewManaged reports whether path lives under a Homebrew prefix, in
 // which case the package manager owns updates and shrink stays out of
 // the way.
-func brewManaged(path string) bool {
+func (a *application) brewManaged(path string) bool {
 	brew, err := exec.LookPath("brew")
 	if err != nil {
 		return false
 	}
-	out, err := exec.Command(brew, "--prefix").Output()
+	out, err := a.command(brew, "--prefix").Output()
 	if err != nil {
 		return false
 	}
@@ -162,79 +162,79 @@ func brewManaged(path string) bool {
 // runUpdate replaces the running binary with the newest release: check
 // for one, verify its checksum, swap atomically. No-op when current,
 // hands off to brew when Homebrew owns the install.
-func runUpdate() {
+func (a *application) runUpdate() {
 	self, err := os.Executable()
 	if err != nil {
-		exitError("could not locate the running shrink: %v", err)
+		a.exitError("could not locate the running shrink: %v", err)
 	}
 	if resolved, err := filepath.EvalSymlinks(self); err == nil {
 		self = resolved
 	}
 
-	if brewManaged(self) {
+	if a.brewManaged(self) {
 		note := "this shrink is managed by Homebrew - update it with: brew upgrade shrink"
-		if machine {
-			printJSON(machineUpdate{Version: version, Note: note})
+		if a.machine {
+			a.printJSON(machineUpdate{Version: version, Note: note})
 		} else {
-			fmt.Fprintf(os.Stderr, "%s %s\n", ui.yellow("!"), ui.yellow(note))
+			fmt.Fprintf(a.stderr, "%s %s\n", a.ui.yellow("!"), a.ui.yellow(note))
 		}
-		os.Exit(0)
+		exitCLI(0)
 	}
 
-	release, err := fetchLatestRelease()
+	release, err := a.fetchLatestRelease()
 	if err != nil {
-		exitError("could not check for updates: %v", err)
+		a.exitError("could not check for updates: %v", err)
 	}
 	current := normVersion(version)
 	latest := normVersion(release.TagName)
 	if current == latest {
-		if machine {
-			printJSON(machineUpdate{Version: current})
+		if a.machine {
+			a.printJSON(machineUpdate{Version: current})
 		} else {
-			fmt.Fprintf(os.Stderr, "%s shrink %s is up to date\n", doneMark(), current)
+			fmt.Fprintf(a.stderr, "%s shrink %s is up to date\n", a.doneMark(), current)
 		}
-		os.Exit(0)
+		exitCLI(0)
 	}
-	if current == "vdev" && !overwrite {
-		exitError("this is a local dev build - shrink update would replace it with the %s release; re-run with -o to continue", latest)
+	if current == "vdev" && !a.overwrite {
+		a.exitError("this is a local dev build - shrink update would replace it with the %s release; re-run with -o to continue", latest)
 	}
 
 	assetName := fmt.Sprintf("shrink-%s-%s-%s.tar.gz", latest, runtime.GOOS, runtime.GOARCH)
 	url := assetURL(release, assetName)
 	if url == "" {
-		exitError("the %s release has no %s/%s build", latest, runtime.GOOS, runtime.GOARCH)
+		a.exitError("the %s release has no %s/%s build", latest, runtime.GOOS, runtime.GOARCH)
 	}
-	if dryRun {
+	if a.dryRun {
 		note := fmt.Sprintf("dry run: would update shrink %s -> %s", current, latest)
-		if machine {
-			printJSON(machineUpdate{Version: current, UpdatedTo: latest, Note: note})
+		if a.machine {
+			a.printJSON(machineUpdate{Version: current, UpdatedTo: latest, Note: note})
 		} else {
-			fmt.Fprintf(os.Stderr, "%s %s\n", doneMark(), ui.dim(note))
+			fmt.Fprintf(a.stderr, "%s %s\n", a.doneMark(), a.ui.dim(note))
 		}
-		os.Exit(0)
+		exitCLI(0)
 	}
 
-	if !machine {
-		fmt.Fprintf(os.Stderr, "%s\n", ui.cyan("updating "+current+" -> "+latest+"..."))
+	if !a.machine {
+		fmt.Fprintf(a.stderr, "%s\n", a.ui.cyan("updating "+current+" -> "+latest+"..."))
 	}
-	tarball, err := downloadFile(url)
+	tarball, err := a.downloadFile(url)
 	if err != nil {
-		exitError("download failed: %v", err)
+		a.exitError("download failed: %v", err)
 	}
-	checksums, err := downloadFile(assetURL(release, "shrink-"+latest+"-checksums.txt"))
+	checksums, err := a.downloadFile(assetURL(release, "shrink-"+latest+"-checksums.txt"))
 	if err != nil {
-		exitError("could not fetch the release checksums: %v", err)
+		a.exitError("could not fetch the release checksums: %v", err)
 	}
 	want := checksumFor(assetName, string(checksums))
 	if want == "" {
-		exitError("the release is missing a checksum for %s", assetName)
+		a.exitError("the release is missing a checksum for %s", assetName)
 	}
 	if got := sha256hex(tarball); got != want {
-		exitError("checksum mismatch for %s (got %s) - the download may be corrupted, try again", assetName, got)
+		a.exitError("checksum mismatch for %s (got %s) - the download may be corrupted, try again", assetName, got)
 	}
 	bin, err := extractBinary(tarball)
 	if err != nil {
-		exitError("could not unpack the release: %v", err)
+		a.exitError("could not unpack the release: %v", err)
 	}
 
 	// swap: write the new binary beside the old one, then two renames.
@@ -243,32 +243,32 @@ func runUpdate() {
 	tmp := self + ".new"
 	old := self + ".old"
 	if err := os.WriteFile(tmp, bin, 0o755); err != nil {
-		exitError("could not write %s: %v", tmp, err)
+		a.exitError("could not write %s: %v", tmp, err)
 	}
 	if err := os.Rename(self, old); err != nil {
 		os.Remove(tmp)
-		exitError("could not move the running binary out of the way: %v", err)
+		a.exitError("could not move the running binary out of the way: %v", err)
 	}
 	if err := os.Rename(tmp, self); err != nil {
 		os.Rename(old, self) // put the running binary back
 		os.Remove(tmp)
-		exitError("could not put the new binary in place: %v", err)
+		a.exitError("could not put the new binary in place: %v", err)
 	}
-	if err := os.Remove(old); err != nil && !machine {
-		fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("could not remove the old binary "+old+" - delete it later: "+err.Error()))
+	if err := os.Remove(old); err != nil && !a.machine {
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("could not remove the old binary "+old+" - delete it later: "+err.Error()))
 	}
 
 	// best effort: confirm the new binary answers
-	if out, err := exec.Command(self, "-V").Output(); err == nil {
+	if out, err := a.command(self, "-V").Output(); err == nil {
 		if got := strings.TrimSpace(string(out)); got != "shrink "+latest {
-			fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("note: the new binary reports "+got))
+			fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("note: the new binary reports "+got))
 		}
 	}
 
-	if machine {
-		printJSON(machineUpdate{Version: latest, Updated: true, UpdatedFrom: current, UpdatedTo: latest})
+	if a.machine {
+		a.printJSON(machineUpdate{Version: latest, Updated: true, UpdatedFrom: current, UpdatedTo: latest})
 	} else {
-		fmt.Fprintf(os.Stderr, "%s updated %s -> %s\n", doneMark(), ui.dim(current), ui.bold(latest))
+		fmt.Fprintf(a.stderr, "%s updated %s -> %s\n", a.doneMark(), a.ui.dim(current), a.ui.bold(latest))
 	}
-	os.Exit(0)
+	exitCLI(0)
 }

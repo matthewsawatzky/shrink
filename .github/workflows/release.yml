@@ -10,20 +10,32 @@ permissions:
   contents: write
 
 jobs:
+  checks:
+    uses: ./.github/workflows/verify.yml
   release:
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Validate and extract changelog
+        run: ./scripts/release-notes.sh "$RELEASE_TAG" > "$RUNNER_TEMP/shrink-notes.txt"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
       - name: Build all platforms
-        run: ./build.sh "${{ github.ref_name }}"
+        run: ./build.sh "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
       - name: Publish release
         run: |
-          gh release create "${{ github.ref_name }}" dist/* \
+          gh release create "$RELEASE_TAG" dist/* --verify-tag \
             --repo "$GITHUB_REPOSITORY" \
-            --title "shrink ${{ github.ref_name }}" \
-            --generate-notes
+            --title "shrink $RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/shrink-notes.txt"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}

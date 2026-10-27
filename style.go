@@ -42,27 +42,16 @@ func (s styler) green(t string) string  { return s.paint(sgrGreen, t) }
 func (s styler) yellow(t string) string { return s.paint(sgrYellow, t) }
 func (s styler) cyan(t string) string   { return s.paint(sgrCyan, t) }
 
-// ui styles everything written to stderr (bar, summaries, errors).
-var ui = newStyler(os.Stderr)
-
-// Status marks: glyphs when styled, plain words when piped or color-disabled.
-func doneMark() string {
-	if ui.on {
-		return ui.green("✓")
+func (a *application) doneMark() string {
+	if a.ui.on {
+		return a.ui.green("✓")
 	}
 	return "done:"
 }
 
-func errMark() string {
-	if ui.on {
-		return ui.red("✗")
+func (a *application) errMark() string {
+	if a.ui.on {
+		return a.ui.red("✗")
 	}
 	return "error:"
-}
-
-func cancelMark() string {
-	if ui.on {
-		return ui.yellow("!")
-	}
-	return ""
 }

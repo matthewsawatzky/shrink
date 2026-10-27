@@ -58,6 +58,8 @@ func TestChannelName(t *testing.T) {
 }
 
 func TestParseProbeInfoVideo(t *testing.T) {
+	a := testApplication()
+
 	data := []byte(`{
 		"format": {
 			"format_name": "mov,mp4,m4a,3gp,3g2,mj2",
@@ -87,7 +89,7 @@ func TestParseProbeInfoVideo(t *testing.T) {
 		]
 	}`)
 
-	info, err := parseProbeInfo("clip.mp4", data)
+	info, err := a.parseProbeInfo("clip.mp4", data)
 	if err != nil {
 		t.Fatalf("parseProbeInfo: %v", err)
 	}
@@ -131,9 +133,9 @@ func TestParseProbeInfoVideo(t *testing.T) {
 	if v.Frames != 2244 {
 		t.Errorf("video frames = %v, want 2244", v.Frames)
 	}
-	a := info.Streams[1]
-	if a.Type != "audio" || a.Codec != "aac" || a.SampleRate != 48000 || a.Channels != 2 {
-		t.Errorf("audio stream = %+v", a)
+	audio := info.Streams[1]
+	if audio.Type != "audio" || audio.Codec != "aac" || audio.SampleRate != 48000 || audio.Channels != 2 {
+		t.Errorf("audio stream = %+v", audio)
 	}
 	if len(info.Warnings) != 0 {
 		t.Errorf("unexpected warnings: %v", info.Warnings)
@@ -141,6 +143,8 @@ func TestParseProbeInfoVideo(t *testing.T) {
 }
 
 func TestParseProbeInfoDurationMismatch(t *testing.T) {
+	a := testApplication()
+
 	data := []byte(`{
 		"format": {
 			"format_name": "mp4",
@@ -161,7 +165,7 @@ func TestParseProbeInfoDurationMismatch(t *testing.T) {
 		]
 	}`)
 
-	info, err := parseProbeInfo("weird.mp4", data)
+	info, err := a.parseProbeInfo("weird.mp4", data)
 	if err != nil {
 		t.Fatalf("parseProbeInfo: %v", err)
 	}
@@ -174,12 +178,14 @@ func TestParseProbeInfoDurationMismatch(t *testing.T) {
 }
 
 func TestParseProbeInfoNoStreams(t *testing.T) {
+	a := testApplication()
+
 	data := []byte(`{
 		"format": {"format_name": "mp4", "duration": "10.000000", "size": "1000"},
 		"streams": []
 	}`)
 
-	info, err := parseProbeInfo("empty.mp4", data)
+	info, err := a.parseProbeInfo("empty.mp4", data)
 	if err != nil {
 		t.Fatalf("parseProbeInfo: %v", err)
 	}
@@ -189,6 +195,8 @@ func TestParseProbeInfoNoStreams(t *testing.T) {
 }
 
 func TestParseProbeInfoExtensionMismatch(t *testing.T) {
+	a := testApplication()
+
 	data := []byte(`{
 		"format": {"format_name": "matroska,webm", "duration": "10.000000", "size": "1000"},
 		"streams": [
@@ -205,7 +213,7 @@ func TestParseProbeInfoExtensionMismatch(t *testing.T) {
 		]
 	}`)
 
-	info, err := parseProbeInfo("clip.mp4", data)
+	info, err := a.parseProbeInfo("clip.mp4", data)
 	if err != nil {
 		t.Fatalf("parseProbeInfo: %v", err)
 	}
@@ -224,6 +232,8 @@ func TestParseProbeInfoExtensionMismatch(t *testing.T) {
 }
 
 func TestFormatStream(t *testing.T) {
+	a := testApplication()
+
 	s := streamInfo{
 		Type:     "video",
 		Codec:    "h264",
@@ -232,7 +242,7 @@ func TestFormatStream(t *testing.T) {
 		FPS:      29.97,
 		Duration: 74.8,
 	}
-	got := formatStream(s)
+	got := a.formatStream(s)
 	for _, want := range []string{"video:", "h264", "1660×1080", "29.97fps", "1m15s"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("formatStream missing %q in %q", want, got)

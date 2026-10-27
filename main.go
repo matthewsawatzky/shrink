@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,24 +15,6 @@ import (
 // -ldflags "-X main.version=v1.2.3"; local builds report "dev".
 var version = "dev"
 
-// fast enables -f/--fast: prefer hardware encoders (VideoToolbox on
-// macOS) for video when available, falling back to software otherwise.
-var fast bool
-
-// dryRun enables -n/--dry-run: show what a run would do without
-// encoding anything.
-var dryRun bool
-
-// overwrite enables -o/--overwrite: claim output paths that already
-// exist (replacing them) instead of skipping or bumping a counter.
-var overwrite bool
-
-// deleteAfter enables -d/--delete: remove the original once a smaller
-// replacement of the same kind exists. Derived files (audio tracks,
-// frame grabs) never trigger deletion.
-var deleteAfter bool
-
-// levelSpec holds the encoder settings one compression level maps to.
 type levelSpec struct {
 	videoCRF     string // libx264 CRF
 	hevcCRF      string // libx265 CRF (its quality scale differs from x264)
@@ -74,83 +57,28 @@ var resolutions = map[string]string{
 	"4k":    `scale=-2:min(2160\,ih-mod(ih\,2))`,
 }
 
-// videoFormat is one output format shrink can encode video to.
-type videoFormat struct {
-	codec string
-	ext   string // container extension; empty means the format key itself
-	args  []string
-}
-
-// Supported video formats. VP9 gets speed flags: its defaults are
-// brutally slow (it would otherwise spend minutes per encode to save a
-// few percent at these bitrates), and single-pass with -b:v 0 keeps
-// quality driven by the CRF alone. hevc/av1 ride in mp4 containers;
-// the hvc1 tag lets Apple devices play the hevc result.
-var videoFormats = map[string]videoFormat{
-	"mp4":  {codec: "libx264", args: []string{"-preset", "medium", "-movflags", "+faststart"}},
-	"mkv":  {codec: "libx264", args: []string{"-preset", "medium"}},
-	"webm": {codec: "libvpx-vp9", args: []string{"-b:v", "0", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4"}},
-	"mov":  {codec: "libx264", args: []string{"-preset", "medium", "-movflags", "+faststart"}},
-	"avi":  {codec: "libx264", args: []string{"-preset", "medium"}},
-	"hevc": {codec: "libx265", ext: "mp4", args: []string{"-preset", "medium", "-tag:v", "hvc1"}},
-	"av1":  {codec: "libsvtav1", ext: "mp4", args: []string{"-preset", "8"}},
-}
-
-// imageFormat is one output format shrink can encode images to.
-type imageFormat struct {
-	codec string
-	ext   string
-}
-
-// Supported image formats
-var imageFormats = map[string]imageFormat{
-	"jpeg": {codec: "mjpeg", ext: "jpg"},
-	"jpg":  {codec: "mjpeg", ext: "jpg"},
-	"png":  {codec: "png", ext: "png"},
-	"webp": {codec: "libwebp", ext: "webp"},
-	"gif":  {codec: "gif", ext: "gif"},
-}
-
-// audioFormat is one output format shrink can encode audio to.
-type audioFormat struct {
-	codec string
-	ext   string
-}
-
-// Supported audio formats
-var audioFormats = map[string]audioFormat{
-	"mp3":  {codec: "libmp3lame", ext: "mp3"},
-	"aac":  {codec: "aac", ext: "m4a"},
-	"m4a":  {codec: "aac", ext: "m4a"},
-	"opus": {codec: "libopus", ext: "opus"},
-	"ogg":  {codec: "libvorbis", ext: "ogg"},
-	"wav":  {codec: "pcm_s16le", ext: "wav"},
-	"flac": {codec: "flac", ext: "flac"},
-}
-
-func usage() {
-	out := os.Stderr
-	fmt.Fprintf(out, "%s %s\n\n", ui.bold("shrink"), ui.dim("- compress images, video and audio with ffmpeg"))
-	fmt.Fprintf(out, "  %s\n", ui.bold("usage: shrink <input> [target...]"))
-	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink folder <folder> [format...] [level]"))
-	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink info <file>...   # inspect codecs, duration, fps, bitrate"))
-	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink doctor   # check ffmpeg and encoder availability"))
-	fmt.Fprintf(out, "  %s\n", ui.bold("       shrink make [targets...]   # generate test media"))
-	fmt.Fprintf(out, "  %s\n\n", ui.bold("       shrink update   # self-update to the latest release"))
-	fmt.Fprintf(out, "%s\n", ui.dim("  folder mode converts every matching file in place. Give one format per"))
-	fmt.Fprintf(out, "%s\n\n", ui.dim("  media kind (e.g. \"jpeg mp4 mp3\"); levels apply to all media. Add -r for subfolders."))
-	fmt.Fprintf(out, "%s\n", ui.bold("targets:"))
+func (a *application) usage() {
+	out := a.stderr
+	fmt.Fprintf(out, "%s %s\n\n", a.ui.bold("shrink"), a.ui.dim("- compress images, video and audio with ffmpeg"))
+	fmt.Fprintf(out, "  %s\n", a.ui.bold("usage: shrink <input> [target...]"))
+	for _, spec := range a.commands() {
+		fmt.Fprintf(out, "  %s\n", a.ui.bold("       shrink "+spec.usage))
+	}
+	fmt.Fprintf(out, "%s\n", a.ui.dim("  folder mode converts every matching file in place. Give one format per"))
+	fmt.Fprintf(out, "%s\n\n", a.ui.dim("  media kind (e.g. \"jpeg mp4 mp3\"); levels apply to all media. Add -r for subfolders."))
+	fmt.Fprintf(out, "%s\n", a.ui.bold("targets:"))
 	for _, t := range []struct{ name, desc string }{
 		{"<resolution>", "340p, 480p, 720p, 1080p, 1440p, 4k"},
-		{"<format>", "jpeg, png, webp, gif | mp4, mkv, webm, mov, avi, hevc, av1"},
-		{"<audio>", "mp3, aac, m4a, opus, ogg, wav, flac"},
+		{"<format>", strings.Join(outputFormats("image"), ", ") + " | " + strings.Join(outputFormats("video"), ", ")},
+		{"<audio>", strings.Join(outputFormats("audio"), ", ")},
 		{"<speed>", "x2, x5, x0.1 ... change video/audio playback speed"},
 		{"<level>", "compress, spacesaver, neversee"},
 	} {
-		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", t.name)), t.desc)
+		fmt.Fprintf(out, "  %s  %s\n", a.ui.cyan(fmt.Sprintf("%-12s", t.name)), t.desc)
 	}
-	fmt.Fprintf(out, "\n%s\n", ui.bold("flags:"))
+	fmt.Fprintf(out, "\n%s\n", a.ui.bold("flags:"))
 	for _, f := range []struct{ name, desc string }{
+		{"-h, --help", "show usage and exit"},
 		{"-v, --verbose", "show step timings, and use ms and KB everywhere"},
 		{"-r, --recursive", "with a folder, also scan subfolders"},
 		{"-j, --jobs N", "folder mode: encode N files at once (default 2)"},
@@ -162,10 +90,10 @@ func usage() {
 		{"-c, --completions", "print shell completions (zsh or bash) and exit"},
 		{"-V, --version", "print the version and exit"},
 	} {
-		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", f.name)), f.desc)
+		fmt.Fprintf(out, "  %s  %s\n", a.ui.cyan(fmt.Sprintf("%-12s", f.name)), f.desc)
 	}
-	fmt.Fprintf(out, "\n%s\n", ui.dim("  speed factors over 1 speed up, under 1 slow down: x2 plays twice as fast, x0.1 ten times slower."))
-	fmt.Fprintf(out, "\n%s\n", ui.bold("examples:"))
+	fmt.Fprintf(out, "\n%s\n", a.ui.dim("  speed factors over 1 speed up, under 1 slow down: x2 plays twice as fast, x0.1 ten times slower."))
+	fmt.Fprintf(out, "\n%s\n", a.ui.bold("examples:"))
 	for _, ex := range []string{
 		"shrink vid.mkv webm spacesaver",
 		"shrink pic.heic 1080p jpeg neversee",
@@ -175,20 +103,19 @@ func usage() {
 		"shrink folder ~/Media jpeg mp4 mp3 spacesaver",
 		"shrink make mp4 red 1080p 60fps 30s",
 	} {
-		fmt.Fprintf(out, "  %s\n", ui.dim(ex))
+		fmt.Fprintf(out, "  %s\n", a.ui.dim(ex))
 	}
-	fmt.Fprintf(out, "\n%s\n", ui.bold("compression levels:"))
+	fmt.Fprintf(out, "\n%s\n", a.ui.bold("compression levels:"))
 	for _, l := range []struct{ name, desc string }{
 		{"compress", "decent quality, solid savings"},
 		{"spacesaver", "noticeably compressed"},
 		{"neversee", "very compressed"},
 	} {
-		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", l.name)), l.desc)
+		fmt.Fprintf(out, "  %s  %s\n", a.ui.cyan(fmt.Sprintf("%-12s", l.name)), l.desc)
 	}
-	fmt.Fprintf(out, "\n%s\n", ui.dim("  A bare shrink <file> run compresses (the compress level). Any specific operation -"))
-	fmt.Fprintf(out, "%s\n", ui.dim("  scale, speed, format, audio extraction - runs alone at near-lossless quality: pass"))
-	fmt.Fprintf(out, "%s\n", ui.dim("  a level to compress on top of it."))
-	fmt.Fprintf(out, "\n%s\n", ui.bold("make targets (shrink make [targets...]):"))
+	fmt.Fprintf(out, "\n%s\n", a.ui.dim("  A bare shrink <file> run compresses (the compress level). Any specific operation -"))
+	fmt.Fprintf(out, "%s\n", a.ui.dim("  scale, speed, format, audio extraction - runs alone at near-lossless quality: pass"))
+	fmt.Fprintf(out, "%s\n", a.ui.dim("  a level to compress on top of it."))
 	for _, t := range []struct{ name, desc string }{
 		{"<format>", "mp4, jpeg, wav ... - the format picks the kind of thing made"},
 		{"<content>", "a color name (red, blue, gray...), bars, test, noise; sine for audio"},
@@ -196,7 +123,7 @@ func usage() {
 		{"<duration>", "Ns or Nm, e.g. 10s, 2m (default 10s)"},
 		{"<hz>", "audio tone frequency, e.g. 440hz (default)"},
 	} {
-		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", t.name)), t.desc)
+		fmt.Fprintf(out, "  %s  %s\n", a.ui.cyan(fmt.Sprintf("%-12s", t.name)), t.desc)
 	}
 }
 
@@ -261,7 +188,7 @@ func outputFormats(kind string) []string {
 	}
 	kept := names[:0]
 	for _, n := range names {
-		if n != "jpg" && n != "aac" {
+		if formatsForKind(kind)[n].aliasOf == "" {
 			kept = append(kept, n)
 		}
 	}
@@ -271,67 +198,67 @@ func outputFormats(kind string) []string {
 // unknownTargetError explains a rejected target. Input-only extensions
 // (aiff, wma, heic...) get their own message, so seeing them in the input
 // list never reads as "why not this?"; anything else lists valid targets.
-func unknownTargetError(arg string) {
+func (a *application) unknownTargetError(arg string) {
 	ext := "." + strings.TrimPrefix(strings.ToLower(arg), ".")
 	if kind := kindForExt(ext); kind != "" {
-		if machine {
-			exitMachineError(machineError{
+		if a.machine {
+			a.exitMachineError(machineError{
 				Error:        fmt.Sprintf("%s is a valid %s input, but shrink cannot write %s", arg, kind, arg),
 				ValidTargets: outputFormats(kind),
 			})
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", errMark(),
-			ui.red(fmt.Sprintf("%s is a valid %s input, but shrink cannot write %s", arg, kind, arg)))
-		fmt.Fprintf(os.Stderr, "  %s %s\n", ui.dim(kind+" outputs:"), strings.Join(outputFormats(kind), ", "))
-		os.Exit(1)
+		fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(),
+			a.ui.red(fmt.Sprintf("%s is a valid %s input, but shrink cannot write %s", arg, kind, arg)))
+		fmt.Fprintf(a.stderr, "  %s %s\n", a.ui.dim(kind+" outputs:"), strings.Join(outputFormats(kind), ", "))
+		exitCLI(1)
 	}
-	if machine {
+	if a.machine {
 		var valid []string
 		valid = append(valid, "340p", "480p", "720p", "1080p", "1440p", "4k")
 		valid = append(valid, "compress", "spacesaver", "neversee")
 		for _, kind := range mediaKinds {
 			valid = append(valid, outputFormats(kind)...)
 		}
-		exitMachineError(machineError{Error: "unknown target: " + arg, ValidTargets: valid})
+		a.exitMachineError(machineError{Error: "unknown target: " + arg, ValidTargets: valid})
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red("unknown target: "+arg))
-	fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("valid targets:"))
-	fmt.Fprintf(os.Stderr, "    %s  %s\n", ui.cyan(fmt.Sprintf("%-10s", "resolution")), "340p, 480p, 720p, 1080p, 1440p, 4k")
-	fmt.Fprintf(os.Stderr, "    %s  %s\n", ui.cyan(fmt.Sprintf("%-10s", "levels")), "compress, spacesaver, neversee")
+	fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red("unknown target: "+arg))
+	fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("valid targets:"))
+	fmt.Fprintf(a.stderr, "    %s  %s\n", a.ui.cyan(fmt.Sprintf("%-10s", "resolution")), "340p, 480p, 720p, 1080p, 1440p, 4k")
+	fmt.Fprintf(a.stderr, "    %s  %s\n", a.ui.cyan(fmt.Sprintf("%-10s", "levels")), "compress, spacesaver, neversee")
 	for _, kind := range mediaKinds {
-		fmt.Fprintf(os.Stderr, "    %s  %s\n", ui.cyan(fmt.Sprintf("%-10s", kind)), strings.Join(outputFormats(kind), ", "))
+		fmt.Fprintf(a.stderr, "    %s  %s\n", a.ui.cyan(fmt.Sprintf("%-10s", kind)), strings.Join(outputFormats(kind), ", "))
 	}
-	os.Exit(1)
+	exitCLI(1)
 }
 
 // unsupportedTypeError names the offending file type and lists every type
 // shrink can read, so the gap is obvious without consulting --help.
-func unsupportedTypeError(input string) {
+func (a *application) unsupportedTypeError(input string) {
 	what := strings.ToLower(filepath.Ext(input))
 	if what == "" {
 		what = "no extension"
 	}
-	if machine {
+	if a.machine {
 		var valid []string
 		for _, kind := range mediaKinds {
 			valid = append(valid, mediaExtensions[kind]...)
 		}
-		exitMachineError(machineError{
+		a.exitMachineError(machineError{
 			Error:       "unsupported file type: " + what,
 			Input:       input,
 			ValidInputs: valid,
 		})
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red("unsupported file type: "+what))
-	fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("shrink reads:"))
+	fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red("unsupported file type: "+what))
+	fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("shrink reads:"))
 	for _, kind := range mediaKinds {
 		var exts []string
 		for _, e := range mediaExtensions[kind] {
 			exts = append(exts, strings.TrimPrefix(e, "."))
 		}
-		fmt.Fprintf(os.Stderr, "    %s  %s\n", ui.cyan(fmt.Sprintf("%-5s", kind)), strings.Join(exts, ", "))
+		fmt.Fprintf(a.stderr, "    %s  %s\n", a.ui.cyan(fmt.Sprintf("%-5s", kind)), strings.Join(exts, ", "))
 	}
-	os.Exit(1)
+	exitCLI(1)
 }
 
 func isTargetResolution(s string) bool { _, ok := resolutions[s]; return ok }
@@ -351,7 +278,7 @@ func parseSpeed(arg string) (speed float64, tag string, ok bool) {
 		return 0, "", false
 	}
 	v, err := strconv.ParseFloat(t[1:], 64)
-	if err != nil || v <= 0 {
+	if err != nil || v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) || math.IsInf(1/v, 0) {
 		return 0, "", false
 	}
 	return v, t, true
@@ -365,31 +292,31 @@ func isSpeedFactor(arg string) bool {
 }
 
 // speedTargetError explains why a speed target was rejected.
-func speedTargetError(arg string) {
+func (a *application) speedTargetError(arg string) {
 	if v, _, ok := parseSpeed(arg); ok && v == 1 {
-		exitError("%s leaves the speed unchanged - drop it, or pick another factor", arg)
+		a.exitError("%s leaves the speed unchanged - drop it, or pick another factor", arg)
 	}
-	exitError("bad speed factor: %s - use x<number> greater than 0, e.g. x5 (faster) or x0.1 (slower)", arg)
+	a.exitError("bad speed factor: %s - use x<number> greater than 0, e.g. x5 (faster) or x0.1 (slower)", arg)
 }
 
 // setFormat stores one format target per kind, so folder mode can take
 // e.g. "jpeg mp4 mp3" (each applies to its own kind). A second format of
 // the same kind is rejected instead of silently overwriting.
-func setFormat(o *options, name string) {
+func (a *application) setFormat(o *options, name string) {
 	switch {
 	case isTargetVideo(name):
 		if o.videoFmt != "" && o.videoFmt != name {
-			exitError("two video formats given: %s and %s - pick one", o.videoFmt, name)
+			a.exitError("two video formats given: %s and %s - pick one", o.videoFmt, name)
 		}
 		o.videoFmt = name
 	case isTargetImage(name):
 		if o.imageFmt != "" && o.imageFmt != name {
-			exitError("two image formats given: %s and %s - pick one", o.imageFmt, name)
+			a.exitError("two image formats given: %s and %s - pick one", o.imageFmt, name)
 		}
 		o.imageFmt = name
 	case isTargetAudio(name):
 		if o.audioFmt != "" && o.audioFmt != name {
-			exitError("two audio formats given: %s and %s - pick one", o.audioFmt, name)
+			a.exitError("two audio formats given: %s and %s - pick one", o.audioFmt, name)
 		}
 		o.audioFmt = name
 	}
@@ -425,294 +352,126 @@ func resHeight(name string) int {
 // targetVideoCodec names the codec a video format target produces, so
 // already-compressed inputs can be matched by codec rather than by
 // container guesswork.
-func targetVideoCodec(videoFmt string) string {
-	switch videoFmt {
-	case "hevc":
-		return "hevc"
-	case "av1":
-		return "av1"
-	case "webm":
-		return "vp9"
-	}
-	return "h264" // mp4, mkv, mov, avi
-}
+func targetVideoCodec(videoFmt string) string { return videoFormats[videoFmt].probe }
 
 // noopReport explains that an input already satisfies the request, so
 // no encoding is needed.
-func noopReport(input string) *fileReport {
-	return &fileReport{
+func (a *application) noopReport(input string) *fileReport {
+	return &fileReport{app: a,
 		input:    input,
 		noop:     true,
 		noopNote: filepath.Base(input) + " is already a compressed file that fits this request - nothing to do (pass a level to squeeze further, or -o to redo)",
 	}
 }
 
-// processOne runs a single compression job and returns its report.
-// All failures come back as errors so batch runs can continue.
-func processOne(input string, o options) (*fileReport, error) {
-	kind := detectKind(input)
-	probeDone := trackStep(input, "inspect input")
-	info := probeFile(input)
-	if kind != "unknown" && !info.ok {
-		return nil, fmt.Errorf("%s does not look like a valid %s file", input, kind)
-	}
-
-	// for audio extraction, make sure there is an audio track to extract
-	if kind == "video" && o.audioFmt != "" && !info.hasAudio {
-		return nil, fmt.Errorf("%s has no audio track - nothing to extract as %s (grab a frame instead, e.g. shrink %s png)", input, o.audioFmt, input)
-	}
-	probeDone()
-
-	// Route by input kind. Cross-format targets are supported where ffmpeg
-	// makes sense of them (video -> audio extracts the track, video -> image
-	// grabs a frame); checkKindTargets already rejected anything else.
-	if err := checkKindTargets(kind, o); err != nil {
-		return nil, err
-	}
-
-	// One of shrink's own outputs fed back in (detected by name) needs
-	// no second compression pass: without an explicit level or speed, a
-	// request the file already satisfies is a no-op, and a resolution
-	// target that still downscales re-encodes at a near-lossless grade.
-	if looksConverted(input) && o.compress == "" && o.speed == "" && !overwrite {
-		switch kind {
-		case "video":
-			if o.audioFmt == "" && o.imageFmt == "" &&
-				targetVideoCodec(coalesce(o.videoFmt, "mp4")) == info.videoCodec {
-				if o.resolution == "" || info.height <= resHeight(o.resolution) {
-					return noopReport(input), nil
-				}
-				return handleRescaleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), info)
-			}
-		case "image":
-			if img, ok := imageFormats[coalesce(o.imageFmt, "jpeg")]; ok && img.codec == info.videoCodec {
-				if o.resolution == "" || info.height <= resHeight(o.resolution) {
-					return noopReport(input), nil
-				}
-				return handleRescaleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"))
-			}
-		case "audio":
-			if af := audioFormats[coalesce(o.audioFmt, "mp3")]; af.codec == info.audioCodec {
-				return noopReport(input), nil
-			}
-		}
-	}
-
-	// Grade: a bare "shrink file" run defaults to the compress level.
-	// Anything more specific (scale, speed, format, extraction) performs
-	// that operation alone at a near-lossless grade - compression requires
-	// an explicit level.
-	grade := o.compress
-	if grade == "" && o.plainRun() {
-		grade = "compress"
-	}
-
-	switch kind {
-	case "video":
-		switch {
-		case o.audioFmt != "":
-			return handleAudioFromVideo(input, o.audioFmt, grade, o.speed, info)
-		case o.imageFmt != "":
-			return handleVideoToImage(input, o.resolution, o.imageFmt, grade, info)
-		default:
-			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), grade, o.speed, info)
-		}
-	case "image":
-		return handleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"), grade)
-	case "audio":
-		return handleAudio(input, coalesce(o.audioFmt, "mp3"), grade, o.speed, info)
-	}
-	return nil, fmt.Errorf("no handler for %s", input)
-}
-
-func main() {
-	args := os.Args[1:]
-
-	// -v/--verbose, -r, -m, -f, -n and -o are plain flags and may appear
-	// anywhere; -j and -c take a value; the input is the first thing left
-	// after flags are pulled out.
-	var positional []string
-	recursive := false
-	jobs := 2
-	for i := 0; i < len(args); i++ {
-		switch a := args[i]; a {
-		case "-v", "--verbose":
-			verbose = true
-		case "-m", "--machine":
-			machine = true
-		case "-r", "--recursive":
-			recursive = true
-		case "-f", "--fast":
-			fast = true
-		case "-n", "--dry-run":
-			dryRun = true
-		case "-o", "--overwrite":
-			overwrite = true
-		case "-d", "--delete":
-			deleteAfter = true
-		case "-V", "--version":
-			fmt.Println("shrink " + version)
-			os.Exit(0)
-		case "-c", "--completions":
-			i++
-			if i >= len(args) {
-				exitError("completions needs a shell: zsh or bash")
-			}
-			printCompletions(args[i])
-		case "-j", "--jobs":
-			i++
-			if i >= len(args) {
-				exitError("jobs needs a number, e.g. shrink folder ~/Media -j 4 jpeg")
-			}
-			n, err := strconv.Atoi(args[i])
-			if err != nil || n < 1 {
-				exitError("jobs needs a number of 1 or more, got %q", args[i])
-			}
-			jobs = n
-		default:
-			positional = append(positional, a)
-		}
-	}
+func (a *application) runMedia(positional []string, recursive bool, jobs int, folderKeyword bool) {
 	if len(positional) == 0 {
-		usage()
-		os.Exit(1)
-	}
-
-	// "info" prints a concise probe of one or more files.
-	if len(positional) > 0 && positional[0] == "info" {
-		runInfo(positional[1:])
-		return
-	}
-
-	// "doctor" checks the install: ffmpeg, ffprobe and every encoder
-	if len(positional) > 0 && positional[0] == "doctor" {
-		if len(positional) > 1 {
-			exitError("doctor takes no arguments - just: shrink doctor")
-		}
-		runDoctor()
-	}
-
-	// "make" generates test media; the rest of the line is targets.
-	if len(positional) > 0 && positional[0] == "make" {
-		runMake(positional[1:])
-		return
-	}
-
-	// "update" replaces the running binary with the newest release.
-	if len(positional) > 0 && positional[0] == "update" {
-		if len(positional) > 1 {
-			exitError("update takes no arguments - just: shrink update")
-		}
-		runUpdate()
-	}
-
-	// "folder" opens explicit folder mode: the next argument is the folder,
-	// and separate format targets per media kind are allowed.
-	folderKeyword := false
-	if len(positional) > 0 && positional[0] == "folder" {
-		folderKeyword = true
-		positional = positional[1:]
-		if len(positional) == 0 {
-			exitError("folder needs a path, e.g. shrink folder ~/Pictures jpeg")
-		}
+		a.exitError("folder needs a path, e.g. shrink folder ~/Pictures jpeg")
 	}
 
 	input := positional[0]
 
 	info, err := os.Stat(input)
 	if err != nil {
-		exitError("input file not found: %s", input)
+		a.exitError("input file not found: %s", input)
 	}
 
 	// Remaining args are targets; keep it flexible (resolution, format, speed, compression in any order)
 	var o options
-	for _, a := range positional[1:] {
+	for _, target := range positional[1:] {
 		switch {
-		case isTargetResolution(a):
-			o.resolution = a
-		case isTargetVideo(a), isTargetImage(a), isTargetAudio(a):
-			setFormat(&o, a)
-		case isTargetCompression(a):
-			o.compress = a
-		case isSpeedFactor(a):
+		case isTargetResolution(target):
+			o.resolution = target
+		case isTargetVideo(target), isTargetImage(target), isTargetAudio(target):
+			a.setFormat(&o, target)
+		case isTargetCompression(target):
+			o.compress = target
+		case isSpeedFactor(target):
 			if o.speed != "" {
-				exitError("two speed factors given: %s and %s - pick one", o.speed, strings.ToLower(a))
+				a.exitError("two speed factors given: %s and %s - pick one", o.speed, strings.ToLower(target))
 			}
-			o.speed = strings.ToLower(a)
+			o.speed = strings.ToLower(target)
 		default:
-			// anything shaped like x<number> (x0, x-2) reads as a speed
+			// anything shaped like x<number> (x0, x-2) reads as target speed
 			// mistake: explain the right shape instead of "unknown target"
-			if t := strings.ToLower(a); strings.HasPrefix(t, "x") && len(t) > 1 {
+			if t := strings.ToLower(target); strings.HasPrefix(t, "x") && len(t) > 1 {
 				if _, perr := strconv.ParseFloat(t[1:], 64); perr == nil {
-					speedTargetError(a)
+					a.speedTargetError(target)
 				}
 			}
-			unknownTargetError(a)
+			a.unknownTargetError(target)
 		}
 	}
 
 	// every remaining path probes or encodes, so the tools must exist
-	requireDeps()
+	a.requireDeps()
 
 	if folderKeyword && !info.IsDir() {
-		exitError("folder mode needs a folder, but %s is a file", input)
-	}
-
-	if !info.IsDir() {
-		kind := detectKind(input)
-		if kind == "unknown" {
-			unsupportedTypeError(input)
-		}
-		// one file can only become one thing; guide toward the two runs
-		if formats := requestedFormats(o); len(formats) > 1 {
-			targetConflictError(input, formats)
-		}
-		if err := checkKindTargets(kind, o); err != nil {
-			exitError("%v", err)
-		}
-		if dryRun {
-			out := wouldProduce(input, kind, o)
-			if machine {
-				machineFiles = append(machineFiles, machineFile{Input: input, Output: out, Kind: kind})
-				machineDryRun = true
-				emitMachineOutput("", false, nil, 0, 1)
-				return
-			}
-			fmt.Fprintf(os.Stderr, "%s dry run: would compress %s -> %s\n", doneMark(), ui.bold(input), ui.bold(out))
-			return
-		}
+		a.exitError("folder mode needs a folder, but %s is a file", input)
 	}
 
 	if recursive && !info.IsDir() {
-		exitError("-r only applies to folders")
+		a.exitError("-r only applies to folders")
 	}
-
 	if info.IsDir() {
-		batchProcess(input, o, recursive, jobs)
+		a.batchProcess(input, o, recursive, jobs)
+		return
+	}
+	kind := detectKind(input)
+	if kind == "unknown" {
+		a.unsupportedTypeError(input)
+	}
+	if formats := requestedFormats(o); len(formats) > 1 {
+		a.targetConflictError(input, formats)
+	}
+	p, err := a.planJob(input, o)
+	if err != nil {
+		a.exitError("%v", err)
+	}
+	if !p.noop {
+		p.reserve()
+	}
+	if a.dryRun {
+		if a.machine {
+			a.machineDryRun = true
+			if p.noop {
+				a.machineNote = a.noopReport(input).noopNote
+			} else {
+				a.machineFiles = append(a.machineFiles, machineFile{Input: input, Output: p.output, Kind: p.kind})
+			}
+			a.emitMachineOutput("", false, nil, 0, -1)
+		} else if p.noop {
+			fmt.Fprintln(a.stderr, a.noopReport(input).noopNote)
+		} else {
+			fmt.Fprintf(a.stderr, "%s dry run: would compress %s -> %s\n", a.doneMark(), a.ui.bold(input), a.ui.bold(p.output))
+		}
 		return
 	}
 
 	start := time.Now()
-	rep, err := processOne(input, o)
+	rep, err := p.execute()
 	if err != nil {
-		if machine {
-			exitMachineError(machineError{Error: err.Error(), Input: input})
+		if a.machine {
+			a.exitMachineError(machineError{Error: err.Error(), Input: input})
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(err.Error()))
-		printStepsFor(input)
-		os.Exit(1)
+		fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(err.Error()))
+		a.printStepsFor(input)
+		exitCLI(1)
 	}
 	if rep.noop {
-		if machine {
-			machineNote = rep.noopNote
-			emitMachineOutput("", false, nil, time.Since(start), -1)
+		if a.machine {
+			a.machineNote = rep.noopNote
+			a.emitMachineOutput("", false, nil, time.Since(start), -1)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", doneMark(), ui.dim(rep.noopNote))
+		fmt.Fprintf(a.stderr, "%s %s\n", a.doneMark(), a.ui.dim(rep.noopNote))
 		return
 	}
-	if machine {
-		emitMachineOutput("", false, nil, time.Since(start), -1)
+	if a.machine {
+		a.recordMachineFile(rep)
+		a.emitMachineOutput("", false, nil, time.Since(start), -1)
+	} else {
+		rep.print()
 	}
 }
 
@@ -751,22 +510,22 @@ func joinAnd(parts []string) string {
 // targetConflictError answers the likely intent - "I wanted a video and its
 // audio" - by explaining one file only yields one output, then showing the
 // per-format commands that actually get them both.
-func targetConflictError(input string, formats []string) {
+func (a *application) targetConflictError(input string, formats []string) {
 	var descs, suggestions []string
 	for _, f := range formats {
 		descs = append(descs, fmt.Sprintf("%s %s", f, formatKind(f)))
 		suggestions = append(suggestions, fmt.Sprintf("shrink %s %s", input, f))
 	}
 	msg := fmt.Sprintf("cannot produce %s from one file", joinAnd(descs))
-	if machine {
-		exitMachineError(machineError{Error: msg, Input: input, Suggestions: suggestions})
+	if a.machine {
+		a.exitMachineError(machineError{Error: msg, Input: input, Suggestions: suggestions})
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(msg))
-	fmt.Fprintf(os.Stderr, "  %s\n", ui.dim("to get both, run it once per format:"))
+	fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(msg))
+	fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("to get both, run it once per format:"))
 	for _, s := range suggestions {
-		fmt.Fprintf(os.Stderr, "    %s\n", ui.cyan(s))
+		fmt.Fprintf(a.stderr, "    %s\n", a.ui.cyan(s))
 	}
-	os.Exit(1)
+	exitCLI(1)
 }
 
 // checkKindTargets rejects format targets that don't make sense for a
@@ -810,11 +569,11 @@ func coalesce(checked, fallback string) string {
 	return fallback
 }
 
-func exitError(f string, a ...interface{}) {
-	msg := fmt.Sprintf(f, a...)
-	if machine {
-		exitMachineError(machineError{Error: msg})
+func (a *application) exitError(f string, values ...interface{}) {
+	msg := fmt.Sprintf(f, values...)
+	if a.machine {
+		a.exitMachineError(machineError{Error: msg})
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errMark(), ui.red(msg))
-	os.Exit(1)
+	fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(msg))
+	exitCLI(1)
 }
