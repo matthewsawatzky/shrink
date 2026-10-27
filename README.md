@@ -101,6 +101,9 @@ shrink clip.mp4 mp3                # extract the audio track
 shrink clip.mp4 png                # grab the first frame as an image
 shrink photo.heic jpeg spacesaver  # convert and compress heavily
 shrink song.wav flac               # lossless conversion (level ignored)
+shrink clip.mp4 x5                 # 5x faster playback
+shrink clip.mp4 x0.1 spacesaver    # 10x slower, heavily compressed
+shrink podcast.mp3 x2              # double-speed audio
 shrink folder ~/Media jpeg mp4 mp3 spacesaver
 ```
 
@@ -114,11 +117,13 @@ With no format target, shrink picks each kind's default (`mp4`, `jpeg`, `mp3`) a
 | Video format | `mp4` `mkv` `webm` `mov` `avi` `hevc` `av1` |
 | Image format | `jpeg` (`jpg`) `png` `webp` `gif` |
 | Audio format | `mp3` `aac` (`m4a`) `opus` `ogg` `wav` `flac` |
+| Speed | `x<number>`, e.g. `x2` `x5` `x0.1` `x2.5` |
 | Compression level | `compress` `spacesaver` `neversee` |
 
 - `hevc` and `av1` outputs are written into `.mp4` containers; `aac` is written as `.m4a`.
 - Resolution targets only ever downscale: an input smaller than the target keeps its size.
 - `wav` and `flac` are lossless, so they ignore the compression level.
+- A speed target over 1 speeds up, under 1 slows down: `x5` plays five times faster (a 1-minute video becomes 12 seconds), `x0.1` ten times slower (6 minutes). Video frames are re-timed and audio is stretched with ffmpeg's tempo filter, so pitch stays the same. Speed applies to video and audio only (images cannot be sped), and it combines with format, resolution and level targets.
 
 ### Compression levels
 
@@ -138,6 +143,8 @@ Outputs are written next to the input, and existing files are never overwritten 
 | `shrink clip.mov mp4` | `clip-compressed.mp4` |
 | `shrink clip.mp4 mp3` | `clip-audio.mp3` |
 | `shrink clip.mp4 png` | `clip-frame.png` |
+| `shrink clip.mp4 x5` | `clip-x5.mp4` |
+| `shrink clip.mp4 x0.1 spacesaver` | `clip-x0.1-spacesaver.mp4` |
 | `shrink pic.jpg spacesaver` | `pic-spacesaver.jpg` |
 
 ### Folder mode

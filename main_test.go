@@ -123,3 +123,65 @@ func TestTargetVideoCodec(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSpeed(t *testing.T) {
+	cases := []struct {
+		arg     string
+		factor  float64
+		tag     string
+		ok      bool
+		isSpeed bool // does isSpeedFactor accept it
+	}{
+		{"x5", 5, "x5", true, true},
+		{"x0.1", 0.1, "x0.1", true, true},
+		{"x2.5", 2.5, "x2.5", true, true},
+		{"X5", 5, "x5", true, true},
+		{"x0.01", 0.01, "x0.01", true, true},
+		{"x1", 1, "x1", true, false}, // valid shape, but no speed change
+		{"5", 0, "", false, false},
+		{"x", 0, "", false, false},
+		{"x0", 0, "", false, false},
+		{"x-2", 0, "", false, false},
+		{"x.5", 0.5, "x.5", true, true},
+		{"xabc", 0, "", false, false},
+		{"speed", 0, "", false, false},
+	}
+	for _, c := range cases {
+		f, tag, ok := parseSpeed(c.arg)
+		if ok != c.ok || (ok && (f != c.factor || tag != c.tag)) {
+			t.Errorf("parseSpeed(%q) = (%v, %q, %v), want (%v, %q, %v)", c.arg, f, tag, ok, c.factor, c.tag, c.ok)
+		}
+		if got := isSpeedFactor(c.arg); got != c.isSpeed {
+			t.Errorf("isSpeedFactor(%q) = %v, want %v", c.arg, got, c.isSpeed)
+		}
+	}
+}
+
+func TestSetptsFilter(t *testing.T) {
+	if got, want := setptsFilter("x5"), "setpts=PTS/5"; got != want {
+		t.Errorf("setptsFilter(x5) = %q, want %q", got, want)
+	}
+	if got, want := setptsFilter("x0.1"), "setpts=PTS/0.1"; got != want {
+		t.Errorf("setptsFilter(x0.1) = %q, want %q", got, want)
+	}
+}
+
+func TestAtempoChain(t *testing.T) {
+	cases := []struct {
+		speed float64
+		want  string
+	}{
+		{1, "atempo=1"},
+		{5, "atempo=5"},
+		{0.5, "atempo=0.5"},
+		{0.1, "atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8"},
+		{0.25, "atempo=0.5,atempo=0.5"},
+		{2.5, "atempo=2.5"},
+		{125, "atempo=100,atempo=1.25"},
+	}
+	for _, c := range cases {
+		if got := atempoChain(c.speed); got != c.want {
+			t.Errorf("atempoChain(%v) = %q, want %q", c.speed, got, c.want)
+		}
+	}
+}

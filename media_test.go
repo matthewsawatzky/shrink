@@ -18,16 +18,19 @@ func resetNaming(t *testing.T) {
 
 func TestCandidateBase(t *testing.T) {
 	cases := []struct {
-		input, outKind, fmtName, operation, resolution, level, want string
+		input, outKind, fmtName, operation, resolution, level, speed, want string
 	}{
-		{"/d/vid.mp4", "video", "mp4", "", "", "", "vid-compressed"},
-		{"/d/vid.mp4", "video", "mp4", "", "720p", "neversee", "vid-720p-neversee"},
-		{"/d/clip.mov", "audio", "mp3", "audio", "", "compress", "clip-audio-compress"},
-		{"/d/clip.mov", "image", "png", "frame", "1080p", "", "clip-1080p-frame"},
-		{"x.png", "image", "jpeg", "", "", "", "x-compressed"},
+		{"/d/vid.mp4", "video", "mp4", "", "", "", "", "vid-compressed"},
+		{"/d/vid.mp4", "video", "mp4", "", "720p", "neversee", "", "vid-720p-neversee"},
+		{"/d/clip.mov", "audio", "mp3", "audio", "", "compress", "", "clip-audio-compress"},
+		{"/d/clip.mov", "image", "png", "frame", "1080p", "", "", "clip-1080p-frame"},
+		{"x.png", "image", "jpeg", "", "", "", "", "x-compressed"},
+		{"/d/clip.mp4", "video", "mp4", "", "", "", "x5", "clip-x5"},
+		{"/d/clip.mp4", "video", "mp4", "", "", "compress", "x0.1", "clip-x0.1-compress"},
+		{"/d/clip.mov", "audio", "mp3", "audio", "", "", "x2", "clip-x2-audio"},
 	}
 	for _, c := range cases {
-		got := candidateBase(c.input, c.outKind, c.fmtName, c.operation, c.resolution, c.level)
+		got := candidateBase(c.input, c.outKind, c.fmtName, c.operation, c.resolution, c.level, c.speed)
 		if got != c.want {
 			t.Errorf("candidateBase(%q...) = %q, want %q", c.input, got, c.want)
 		}
@@ -62,7 +65,7 @@ func TestOutputFileName(t *testing.T) {
 
 	// fresh name
 	resetNaming(t)
-	if got := outputFileName(input, "video", "mp4", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("fresh output = %q", got)
 	}
 
@@ -71,14 +74,14 @@ func TestOutputFileName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a-compressed.mp4"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := outputFileName(input, "video", "mp4", "", "", ""); got != filepath.Join(dir, "a-compressed-1.mp4") {
+	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed-1.mp4") {
 		t.Errorf("collision should bump the counter, got %q", got)
 	}
 
 	// -o claims the existing name instead of bumping
 	resetNaming(t)
 	overwrite = true
-	if got := outputFileName(input, "video", "mp4", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("overwrite should claim the existing name, got %q", got)
 	}
 	overwrite = false
@@ -88,16 +91,16 @@ func TestOutputFileName(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "a-compressed.mp4")); err != nil {
 		t.Fatal(err)
 	}
-	if got := outputFileName(input, "video", "mp4", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("first claim = %q", got)
 	}
-	if got := outputFileName(input, "video", "mp4", "", "", ""); got != filepath.Join(dir, "a-compressed-1.mp4") {
+	if got := outputFileName(input, "video", "mp4", "", "", "", ""); got != filepath.Join(dir, "a-compressed-1.mp4") {
 		t.Errorf("second claim should bump, got %q", got)
 	}
 
 	// tags and format-aware extensions
 	resetNaming(t)
-	if got := outputFileName(input, "video", "hevc", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
+	if got := outputFileName(input, "video", "hevc", "", "", "", ""); got != filepath.Join(dir, "a-compressed.mp4") {
 		t.Errorf("hevc output should use the mp4 extension, got %q", got)
 	}
 }

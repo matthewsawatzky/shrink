@@ -22,6 +22,14 @@ func TestKindAllowed(t *testing.T) {
 	if kindAllowed("unknown", onlyVideo) {
 		t.Error("unknown kind is never allowed")
 	}
+	// a speed target excludes images, which cannot be sped
+	speedOnly := options{speed: "x5"}
+	if kindAllowed("image", speedOnly) {
+		t.Error("a speed target should not allow image files")
+	}
+	if !kindAllowed("video", speedOnly) || !kindAllowed("audio", speedOnly) {
+		t.Error("a speed target should allow video and audio")
+	}
 }
 
 func TestFailMsg(t *testing.T) {
@@ -66,6 +74,17 @@ func TestWouldProduce(t *testing.T) {
 		t.Errorf("hevc = %q, want %q", got, want)
 	}
 
+	// speed targets tag the output name
+	if got, want := wouldProduce(f, "video", options{speed: "x5"}), filepath.Join(dir, "v-x5.mp4"); got != want {
+		t.Errorf("video speed = %q, want %q", got, want)
+	}
+	if got, want := wouldProduce(f, "video", options{speed: "x0.1", compress: "spacesaver"}), filepath.Join(dir, "v-x0.1-spacesaver.mp4"); got != want {
+		t.Errorf("video speed + level = %q, want %q", got, want)
+	}
+	if got, want := wouldProduce(filepath.Join(dir, "s.mp3"), "audio", options{speed: "x2.5"}), filepath.Join(dir, "s-x2.5.mp3"); got != want {
+		t.Errorf("audio speed = %q, want %q", got, want)
+	}
+
 	// image and audio defaults
 	if got, want := wouldProduce(filepath.Join(dir, "p.png"), "image", options{}), filepath.Join(dir, "p-compressed.jpg"); got != want {
 		t.Errorf("image default = %q, want %q", got, want)
@@ -97,6 +116,7 @@ func TestLooksConverted(t *testing.T) {
 	converted := []string{
 		"vid-compressed.mp4", "vid-720p.mp4", "vid-720p-neversee.mp4",
 		"vid-4k.mp4", "clip-audio.mp3", "clip-frame.png", "vid-spacesaver.mp4",
+		"clip-x5.mp4", "clip-x0.1.mp3", "tone-x2.5.wav",
 	}
 	for _, name := range converted {
 		if !looksConverted(name) {
@@ -105,6 +125,7 @@ func TestLooksConverted(t *testing.T) {
 	}
 	fresh := []string{
 		"IMG_1234.MOV", "holiday.mp4", "IMG_1080p.MOV", "clip.mp3", "note.txt",
+		"mix-x.mp4", "box-drawer.mp4",
 	}
 	for _, name := range fresh {
 		if looksConverted(name) {
@@ -122,9 +143,13 @@ func TestWorthRevisit(t *testing.T) {
 	if !worthRevisit("whatever.mp4", options{compress: "neversee"}) {
 		t.Error("an explicit level should always revisit a converted-looking file")
 	}
-	// no level and no resolution: nothing this run would change
+	// so does an explicit speed request
+	if !worthRevisit("whatever.mp4", options{speed: "x5"}) {
+		t.Error("an explicit speed should always revisit a converted-looking file")
+	}
+	// no level, speed or resolution: nothing this run would change
 	if worthRevisit("whatever.mp4", options{}) {
-		t.Error("no level and no resolution should not revisit")
+		t.Error("no level, speed or resolution should not revisit")
 	}
 }
 

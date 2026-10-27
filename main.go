@@ -132,6 +132,7 @@ func usage() {
 		{"<resolution>", "340p, 480p, 720p, 1080p, 1440p, 4k"},
 		{"<format>", "jpeg, png, webp, gif | mp4, mkv, webm, mov, avi, hevc, av1"},
 		{"<audio>", "mp3, aac, m4a, opus, ogg, wav, flac"},
+		{"<speed>", "x2, x5, x0.1 ... change video/audio playback speed"},
 		{"<level>", "compress, spacesaver, neversee"},
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", t.name)), t.desc)
@@ -151,11 +152,14 @@ func usage() {
 	} {
 		fmt.Fprintf(out, "  %s  %s\n", ui.cyan(fmt.Sprintf("%-12s", f.name)), f.desc)
 	}
+	fmt.Fprintf(out, "\n%s\n", ui.dim("  speed factors over 1 speed up, under 1 slow down: x2 plays twice as fast, x0.1 ten times slower."))
 	fmt.Fprintf(out, "\n%s\n", ui.bold("examples:"))
 	for _, ex := range []string{
 		"shrink vid.mkv webm spacesaver",
 		"shrink pic.heic 1080p jpeg neversee",
 		"shrink clip.mp4 mp3",
+		"shrink clip.mp4 x5",
+		"shrink clip.mp4 x0.1 spacesaver",
 		"shrink folder ~/Media jpeg mp4 mp3 spacesaver",
 		"shrink make mp4 red 1080p 60fps 30s",
 	} {
@@ -324,6 +328,35 @@ func isTargetCompression(s string) bool {
 	return ok
 }
 
+// parseSpeed parses a speed target "x<number>" (x5, x0.1, x2.5), returning
+// the factor (>0). ok=false for anything x-shaped but malformed.
+func parseSpeed(arg string) (speed float64, tag string, ok bool) {
+	t := strings.ToLower(arg)
+	if !strings.HasPrefix(t, "x") {
+		return 0, "", false
+	}
+	v, err := strconv.ParseFloat(t[1:], 64)
+	if err != nil || v <= 0 {
+		return 0, "", false
+	}
+	return v, t, true
+}
+
+// isSpeedFactor reports whether arg is a well-formed speed target whose
+// factor would actually change playback (x1 is rejected as a mistake).
+func isSpeedFactor(arg string) bool {
+	v, _, ok := parseSpeed(arg)
+	return ok && v != 1
+}
+
+// speedTargetError explains why a speed target was rejected.
+func speedTargetError(arg string) {
+	if v, _, ok := parseSpeed(arg); ok && v == 1 {
+		exitError("%s leaves the speed unchanged - drop it, or pick another factor", arg)
+	}
+	exitError("bad speed factor: %s - use x<number> greater than 0, e.g. x5 (faster) or x0.1 (slower)", arg)
+}
+
 // setFormat stores one format target per kind, so folder mode can take
 // e.g. "jpeg mp4 mp3" (each applies to its own kind). A second format of
 // the same kind is rejected instead of silently overwriting.
@@ -352,6 +385,7 @@ type options struct {
 	resolution         string
 	videoFmt, imageFmt string
 	audioFmt, compress string
+	speed              string // raw factor as typed, e.g. "x5" or "x0.1"
 }
 
 // resHeight returns the pixel height a resolution target caps at.
@@ -415,10 +449,10 @@ func processOne(input string, o options) (*fileReport, error) {
 	}
 
 	// One of shrink's own outputs fed back in (detected by name) needs
-	// no second compression pass: without an explicit level, a request
-	// the file already satisfies is a no-op, and a resolution target that
-	// still downscales re-encodes at a near-lossless grade.
-	if looksConverted(input) && o.compress == "" && !overwrite {
+	// no second compression pass: without an explicit level or speed, a
+	// request the file already satisfies is a no-op, and a resolution
+	// target that still downscales re-encodes at a near-lossless grade.
+	if looksConverted(input) && o.compress == "" && o.speed == "" && !overwrite {
 		switch kind {
 		case "video":
 			if o.audioFmt == "" && o.imageFmt == "" &&
@@ -446,16 +480,16 @@ func processOne(input string, o options) (*fileReport, error) {
 	case "video":
 		switch {
 		case o.audioFmt != "":
-			return handleAudioFromVideo(input, o.audioFmt, o.compress, info)
+			return handleAudioFromVideo(input, o.audioFmt, o.compress, o.speed, info)
 		case o.imageFmt != "":
 			return handleVideoToImage(input, o.resolution, o.imageFmt, o.compress, info)
 		default:
-			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), o.compress, info)
+			return handleVideo(input, o.resolution, coalesce(o.videoFmt, "mp4"), o.compress, o.speed, info)
 		}
 	case "image":
 		return handleImage(input, o.resolution, coalesce(o.imageFmt, "jpeg"), o.compress)
 	case "audio":
-		return handleAudio(input, coalesce(o.audioFmt, "mp3"), o.compress, info)
+		return handleAudio(input, coalesce(o.audioFmt, "mp3"), o.compress, o.speed, info)
 	}
 	return nil, fmt.Errorf("no handler for %s", input)
 }
@@ -553,7 +587,7 @@ func main() {
 		exitError("input file not found: %s", input)
 	}
 
-	// Remaining args are targets; keep it flexible (resolution, format, compression in any order)
+	// Remaining args are targets; keep it flexible (resolution, format, speed, compression in any order)
 	var o options
 	for _, a := range positional[1:] {
 		switch {
@@ -563,7 +597,19 @@ func main() {
 			setFormat(&o, a)
 		case isTargetCompression(a):
 			o.compress = a
+		case isSpeedFactor(a):
+			if o.speed != "" {
+				exitError("two speed factors given: %s and %s - pick one", o.speed, strings.ToLower(a))
+			}
+			o.speed = strings.ToLower(a)
 		default:
+			// anything shaped like x<number> (x0, x-2) reads as a speed
+			// mistake: explain the right shape instead of "unknown target"
+			if t := strings.ToLower(a); strings.HasPrefix(t, "x") && len(t) > 1 {
+				if _, perr := strconv.ParseFloat(t[1:], 64); perr == nil {
+					speedTargetError(a)
+				}
+			}
 			unknownTargetError(a)
 		}
 	}
@@ -696,6 +742,9 @@ func checkKindTargets(kind string, o options) error {
 	}
 	switch kind {
 	case "image":
+		if o.speed != "" {
+			return fmt.Errorf("cannot change the speed of an image - %s applies to video and audio only", o.speed)
+		}
 		if o.videoFmt != "" {
 			return fmt.Errorf("cannot convert an image to %s - only image-to-image is supported", o.videoFmt)
 		}
@@ -708,6 +757,10 @@ func checkKindTargets(kind string, o options) error {
 		}
 		if o.imageFmt != "" {
 			return fmt.Errorf("cannot convert audio to %s", o.imageFmt)
+		}
+	case "video":
+		if o.imageFmt != "" && o.speed != "" {
+			return fmt.Errorf("a frame grab has no speed - drop %s to grab frames, or drop %s to change speed", o.speed, o.imageFmt)
 		}
 	}
 	return nil

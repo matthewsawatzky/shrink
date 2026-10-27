@@ -73,8 +73,12 @@ func countMediaFiles(dir string) int {
 }
 
 // kindAllowed reports whether a file kind has a matching format target.
-// With no format targets at all, every kind is in scope.
+// With no format targets at all, every kind is in scope - except images
+// cannot be sped, so they fall out when a speed target is set.
 func kindAllowed(kind string, o options) bool {
+	if o.speed != "" && kind == "image" {
+		return false
+	}
 	if o.videoFmt == "" && o.imageFmt == "" && o.audioFmt == "" {
 		return true
 	}
@@ -132,14 +136,20 @@ func looksConverted(path string) bool {
 			return true
 		}
 	}
+	// a speed tag trailing the stem: "-x5", "-x0.1", "-x2.5"
+	if i := strings.LastIndexByte(base, '-'); i >= 0 {
+		if _, _, ok := parseSpeed(base[i+1:]); ok {
+			return true
+		}
+	}
 	return false
 }
 
 // worthRevisit reports whether a converted-looking file deserves another
-// pass: an explicit level squeezes it further, or a resolution target
-// would genuinely downscale it.
+// pass: an explicit level squeezes it further, a speed target re-times
+// it, or a resolution target would genuinely downscale it.
 func worthRevisit(f string, o options) bool {
-	if o.compress != "" {
+	if o.compress != "" || o.speed != "" {
 		return true
 	}
 	if o.resolution == "" {
@@ -157,16 +167,16 @@ func wouldProduce(f, kind string, o options) string {
 	case "video":
 		switch {
 		case o.audioFmt != "":
-			return filepath.Join(dir, candidateBase(f, "audio", o.audioFmt, "audio", "", o.compress)+"."+outExt("audio", o.audioFmt))
+			return filepath.Join(dir, candidateBase(f, "audio", o.audioFmt, "audio", "", o.compress, o.speed)+"."+outExt("audio", o.audioFmt))
 		case o.imageFmt != "":
-			return filepath.Join(dir, candidateBase(f, "image", o.imageFmt, "frame", o.resolution, o.compress)+"."+outExt("image", o.imageFmt))
+			return filepath.Join(dir, candidateBase(f, "image", o.imageFmt, "frame", o.resolution, o.compress, "")+"."+outExt("image", o.imageFmt))
 		default:
-			return filepath.Join(dir, candidateBase(f, "video", coalesce(o.videoFmt, "mp4"), "", o.resolution, o.compress)+"."+outExt("video", coalesce(o.videoFmt, "mp4")))
+			return filepath.Join(dir, candidateBase(f, "video", coalesce(o.videoFmt, "mp4"), "", o.resolution, o.compress, o.speed)+"."+outExt("video", coalesce(o.videoFmt, "mp4")))
 		}
 	case "image":
-		return filepath.Join(dir, candidateBase(f, "image", coalesce(o.imageFmt, "jpeg"), "", o.resolution, o.compress)+"."+outExt("image", coalesce(o.imageFmt, "jpeg")))
+		return filepath.Join(dir, candidateBase(f, "image", coalesce(o.imageFmt, "jpeg"), "", o.resolution, o.compress, "")+"."+outExt("image", coalesce(o.imageFmt, "jpeg")))
 	case "audio":
-		return filepath.Join(dir, candidateBase(f, "audio", coalesce(o.audioFmt, "mp3"), "", "", o.compress)+"."+outExt("audio", coalesce(o.audioFmt, "mp3")))
+		return filepath.Join(dir, candidateBase(f, "audio", coalesce(o.audioFmt, "mp3"), "", "", o.compress, o.speed)+"."+outExt("audio", coalesce(o.audioFmt, "mp3")))
 	}
 	return ""
 }

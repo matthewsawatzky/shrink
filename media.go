@@ -18,12 +18,13 @@ import (
 //	<original>-<operations>.<ext>
 //
 // Tags appear only for work that actually happened: an explicit resolution
-// (scaling), a cross-kind operation ("audio", "frame"), or an explicit
-// compression level. The format change itself isn't tagged - the extension
-// already shows it - so a plain re-encode or conversion falls back to
-// "-compressed". The extension always reflects the true output format.
-func outputFileName(input, outKind, fmtName, operation, resolution, level string) string {
-	stem := candidateBase(input, outKind, fmtName, operation, resolution, level)
+// (scaling), a speed factor (x5, x0.1), a cross-kind operation ("audio",
+// "frame"), or an explicit compression level. The format change itself
+// isn't tagged - the extension already shows it - so a plain re-encode or
+// conversion falls back to "-compressed". The extension always reflects
+// the true output format.
+func outputFileName(input, outKind, fmtName, operation, resolution, level, speed string) string {
+	stem := candidateBase(input, outKind, fmtName, operation, resolution, level, speed)
 	return claimOutput(filepath.Dir(input), stem, outExt(outKind, fmtName))
 }
 
@@ -39,11 +40,11 @@ func claimOutput(dir, stem, ext string) string {
 
 // candidateBase is the "<original>-<operations>" part of an output name,
 // without extension or directory.
-func candidateBase(input, outKind, fmtName, operation, resolution, level string) string {
+func candidateBase(input, outKind, fmtName, operation, resolution, level, speed string) string {
 	base := strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
 
 	var parts []string
-	for _, tag := range []string{resolution, operation, level} {
+	for _, tag := range []string{resolution, speed, operation, level} {
 		if tag != "" {
 			parts = append(parts, tag)
 		}
@@ -53,6 +54,31 @@ func candidateBase(input, outKind, fmtName, operation, resolution, level string)
 		parts = append(parts, "compressed")
 	}
 	return base + "-" + strings.Join(parts, "-")
+}
+
+// setptsFilter returns the video timestamp filter for one speed target:
+// setpts=PTS/5 packs frames five times closer (faster), PTS/0.1 spreads
+// them out (slower).
+func setptsFilter(speed string) string {
+	return "setpts=PTS/" + strings.TrimPrefix(speed, "x")
+}
+
+// atempoChain renders one speed factor as an atempo filter chain. A
+// single atempo only accepts 0.5 through 100, so factors outside that
+// range chain stages: x0.1 becomes atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8.
+func atempoChain(speed float64) string {
+	f := speed
+	var stages []string
+	for f < 0.5 {
+		stages = append(stages, "atempo=0.5")
+		f *= 2
+	}
+	for f > 100 {
+		stages = append(stages, "atempo=100")
+		f /= 100
+	}
+	stages = append(stages, "atempo="+strconv.FormatFloat(f, 'g', -1, 64))
+	return strings.Join(stages, ",")
 }
 
 // outExt maps a format target to the file extension it really produces
@@ -337,7 +363,7 @@ func videoCRF(codec string, lv levelSpec) string {
 	return lv.videoCRF
 }
 
-func handleVideo(input string, resolution string, videoFmt string, compress string, info mediaInfo) (*fileReport, error) {
+func handleVideo(input string, resolution string, videoFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
 	if videoFmt == "" {
 		videoFmt = "mp4"
 	}
@@ -375,16 +401,30 @@ func handleVideo(input string, resolution string, videoFmt string, compress stri
 		args = append(args, "-c:a", "libopus", "-b:a", levels.audioBitrate)
 	}
 
-	if resolution != "" {
-		args = append(args, "-vf", resolutions[resolution])
+	if resolution != "" || speed != "" {
+		var filters []string
+		if resolution != "" {
+			filters = append(filters, resolutions[resolution])
+		}
+		if speed != "" {
+			filters = append(filters, setptsFilter(speed))
+		}
+		args = append(args, "-vf", strings.Join(filters, ","))
+	}
+	if speed != "" && info.hasAudio {
+		v, _, _ := parseSpeed(speed)
+		args = append(args, "-af", atempoChain(v))
 	}
 
-	out := outputFileName(input, "video", videoFmt, "", resolution, level)
+	out := outputFileName(input, "video", videoFmt, "", resolution, level, speed)
 	args = append(args, out)
 
 	label := "compressing"
 	if resolution != "" {
-		label = "compressing + scaling"
+		label += " + scaling"
+	}
+	if speed != "" {
+		label += " + speed"
 	}
 	took, err := runFFmpegWithDuration(label, info.duration, args...)
 	if err != nil {
@@ -425,7 +465,7 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	}
 	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
 
-	out := outputFileName(input, "image", imageFmt, "", resolution, level)
+	out := outputFileName(input, "image", imageFmt, "", resolution, level, "")
 	args = append(args, "-frames:v", "1", out)
 
 	label := "compressing"
@@ -439,7 +479,7 @@ func handleImage(input string, resolution string, imageFmt string, compress stri
 	return finishJob(input, "image", out, took, "compress"), nil
 }
 
-func handleAudio(input string, audioFmt string, compress string, info mediaInfo) (*fileReport, error) {
+func handleAudio(input string, audioFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
 	if audioFmt == "" {
 		audioFmt = "mp3"
 	}
@@ -452,11 +492,19 @@ func handleAudio(input string, audioFmt string, compress string, info mediaInfo)
 
 	args := []string{"-i", input, "-c:a", af.codec}
 	args = append(args, audioEncodeArgs(af.codec, levels)...)
+	if speed != "" {
+		v, _, _ := parseSpeed(speed)
+		args = append(args, "-af", atempoChain(v))
+	}
 
-	out := outputFileName(input, "audio", audioFmt, "", "", level)
+	out := outputFileName(input, "audio", audioFmt, "", "", level, speed)
 	args = append(args, out)
 
-	took, err := runFFmpegWithDuration("compressing", info.duration, args...)
+	label := "compressing"
+	if speed != "" {
+		label += " + speed"
+	}
+	took, err := runFFmpegWithDuration(label, info.duration, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg failed: %v", err)
 	}
@@ -589,8 +637,9 @@ func finishJob(input, kind, out string, took time.Duration, operation string) *f
 }
 
 // handleAudioFromVideo extracts the audio track of a video into its own
-// file, e.g. "shrink clip.mp4 mp3".
-func handleAudioFromVideo(input string, audioFmt string, compress string, info mediaInfo) (*fileReport, error) {
+// file, e.g. "shrink clip.mp4 mp3". A speed target rides along as an
+// atempo filter on the extracted track.
+func handleAudioFromVideo(input string, audioFmt string, compress string, speed string, info mediaInfo) (*fileReport, error) {
 	level := compress
 	if compress == "" {
 		compress = "compress"
@@ -600,8 +649,12 @@ func handleAudioFromVideo(input string, audioFmt string, compress string, info m
 
 	args := []string{"-i", input, "-vn", "-c:a", af.codec}
 	args = append(args, audioEncodeArgs(af.codec, levels)...)
+	if speed != "" {
+		v, _, _ := parseSpeed(speed)
+		args = append(args, "-af", atempoChain(v))
+	}
 
-	out := outputFileName(input, "audio", audioFmt, "audio", "", level)
+	out := outputFileName(input, "audio", audioFmt, "audio", "", level, speed)
 	args = append(args, out)
 
 	took, err := runFFmpegWithDuration("extracting audio", info.duration, args...)
@@ -627,7 +680,7 @@ func handleVideoToImage(input string, resolution string, imageFmt string, compre
 	}
 	args = append(args, imageCodecArgs(img.codec, levels.imageQuality, levels.webpQuality)...)
 
-	out := outputFileName(input, "image", imageFmt, "frame", resolution, level)
+	out := outputFileName(input, "image", imageFmt, "frame", resolution, level, "")
 	args = append(args, "-frames:v", "1", "-update", "1", out)
 
 	took, err := runFFmpegWithDuration("grabbing frame", info.duration, args...)
@@ -671,7 +724,7 @@ func handleRescaleVideo(input string, resolution string, videoFmt string, info m
 		args = append(args, "-c:a", "libopus", "-b:a", compressionLevels["compress"].audioBitrate)
 	}
 
-	out := outputFileName(input, "video", videoFmt, "", resolution, "")
+	out := outputFileName(input, "video", videoFmt, "", resolution, "", "")
 	args = append(args, out)
 
 	took, err := runFFmpegWithDuration("downscaling", info.duration, args...)
@@ -690,7 +743,7 @@ func handleRescaleImage(input string, resolution string, imageFmt string) (*file
 	args = append(args, "-vf", resolutions[resolution])
 	args = append(args, imageCodecArgs(img.codec, "2", "95")...)
 
-	out := outputFileName(input, "image", imageFmt, "", resolution, "")
+	out := outputFileName(input, "image", imageFmt, "", resolution, "", "")
 	args = append(args, "-frames:v", "1", out)
 
 	took, err := runFFmpeg("downscaling", args...)
