@@ -28,6 +28,7 @@ const (
 // ghRelease is the slice of the GitHub release API shrink update uses.
 type ghRelease struct {
 	TagName string `json:"tag_name"`
+	Body    string `json:"body"`
 	Assets  []struct {
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
@@ -47,6 +48,9 @@ type machineUpdate struct {
 // forever (release tarballs are a couple of megabytes).
 func (a *application) downloadFile(url string) ([]byte, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
+	if a.updateHTTPClient != nil {
+		client = a.updateHTTPClient
+	}
 	req, err := http.NewRequestWithContext(a.ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -163,6 +167,7 @@ func (a *application) brewManaged(path string) bool {
 // for one, verify its checksum, swap atomically. No-op when current,
 // hands off to brew when Homebrew owns the install.
 func (a *application) runUpdate() {
+	a.printUpdateHeader()
 	self, err := os.Executable()
 	if err != nil {
 		a.exitError("could not locate the running shrink: %v", err)
@@ -181,17 +186,26 @@ func (a *application) runUpdate() {
 		exitCLI(0)
 	}
 
+	a.runUpdateAt(self)
+}
+
+// runUpdateAt keeps the install target explicit so update tests can only
+// replace a disposable binary, never the running test executable.
+func (a *application) runUpdateAt(self string) {
 	release, err := a.fetchLatestRelease()
 	if err != nil {
 		a.exitError("could not check for updates: %v", err)
 	}
 	current := normVersion(version)
 	latest := normVersion(release.TagName)
+	if !a.machine {
+		fmt.Fprintf(a.stderr, "  Latest    %s\n\n", a.ui.bold(latest))
+	}
 	if current == latest {
 		if a.machine {
 			a.printJSON(machineUpdate{Version: current})
 		} else {
-			fmt.Fprintf(a.stderr, "%s shrink %s is up to date\n", a.doneMark(), current)
+			fmt.Fprintf(a.stderr, "%s Already up to date.\n", a.doneMark())
 		}
 		exitCLI(0)
 	}
@@ -209,13 +223,14 @@ func (a *application) runUpdate() {
 		if a.machine {
 			a.printJSON(machineUpdate{Version: current, UpdatedTo: latest, Note: note})
 		} else {
-			fmt.Fprintf(a.stderr, "%s %s\n", a.doneMark(), a.ui.dim(note))
+			a.printUpdateNotes(release)
+			fmt.Fprintf(a.stderr, "%s Dry run complete. No files changed.\n", a.doneMark())
 		}
 		exitCLI(0)
 	}
 
 	if !a.machine {
-		fmt.Fprintf(a.stderr, "%s\n", a.ui.cyan("updating "+current+" -> "+latest+"..."))
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.cyan("Downloading and verifying release..."))
 	}
 	tarball, err := a.downloadFile(url)
 	if err != nil {
@@ -235,6 +250,17 @@ func (a *application) runUpdate() {
 	bin, err := extractBinary(tarball)
 	if err != nil {
 		a.exitError("could not unpack the release: %v", err)
+	}
+	if !a.machine {
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.dim("SHA-256 checksum verified"))
+		if info, err := os.Stat(self); err == nil {
+			a.printUpdateSize(info.Size(), int64(len(bin)))
+		} else {
+			fmt.Fprintf(a.stderr, "  Binary    %s (current size unavailable)\n", a.humanSize(int64(len(bin))))
+		}
+		fmt.Fprintln(a.stderr)
+		a.printUpdateNotes(release)
+		fmt.Fprintf(a.stderr, "  %s\n", a.ui.cyan("Installing update..."))
 	}
 
 	// swap: write the new binary beside the old one, then two renames.
@@ -268,7 +294,7 @@ func (a *application) runUpdate() {
 	if a.machine {
 		a.printJSON(machineUpdate{Version: latest, Updated: true, UpdatedFrom: current, UpdatedTo: latest})
 	} else {
-		fmt.Fprintf(a.stderr, "%s updated %s -> %s\n", a.doneMark(), a.ui.dim(current), a.ui.bold(latest))
+		fmt.Fprintf(a.stderr, "\n%s %s  %s -> %s\n", a.doneMark(), a.ui.bold("Update complete."), a.ui.dim(current), a.ui.bold(latest))
 	}
 	exitCLI(0)
 }

@@ -73,6 +73,8 @@ The installers also notice when ffmpeg is missing and offer to install it for yo
 
 `shrink update` checks GitHub for the latest release, verifies its SHA-256 checksum, and swaps the binary in place — a no-op when already current. Homebrew-managed installs are detected and pointed at `brew upgrade shrink` instead, and local dev builds require `-o` to be replaced.
 
+The updater shows your current and latest versions, the actual binary size change in percent, and up to three release-note bullets each for Added, Changed, and Fixed. It links to the full GitHub changelog and confirms when installation is complete. Use `shrink update -n` to preview the release notes without downloading or installing the binary.
+
 ### Uninstalling
 
 The uninstaller removes the binary, the Homebrew package (if that's how it was installed), and the shell completions. ffmpeg is left alone, since other tools use it.

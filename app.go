@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,6 +24,7 @@ type application struct {
 	queued, lowPriority bool
 	cpuFactory          func() cpuController
 	queueExecutor       func(context.Context, queueJob, int, bool) (*fileReport, error)
+	updateHTTPClient    *http.Client
 	ctx                 context.Context
 	stdout, stderr      io.Writer
 	ui                  styler

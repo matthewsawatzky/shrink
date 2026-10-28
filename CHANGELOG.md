@@ -6,6 +6,12 @@ Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-28
+
+### Changed
+
+- A clearer `shrink update` display with current/latest versions, binary size and percentage change, short release highlights, the full changelog link, and an explicit completion message.
+
 ## [2.0.0] - 2026-10-28
 
 ### Added
