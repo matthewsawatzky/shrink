@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -79,9 +80,12 @@ func (a *application) usage() {
 	fmt.Fprintf(out, "\n%s\n", a.ui.bold("flags:"))
 	for _, f := range []struct{ name, desc string }{
 		{"-h, --help", "show usage and exit"},
+		{"--cpu N%", "queue CPU budget or saved queue default (1-100%)"},
+		{"--next", "queue this job before other waiting jobs"},
+		{"--boost", "run this queued job alone with a 100% CPU allowance"},
 		{"-v, --verbose", "show step timings, and use ms and KB everywhere"},
 		{"-r, --recursive", "with a folder, also scan subfolders"},
-		{"-j, --jobs N", "folder mode: encode N files at once (default 2)"},
+		{"-j, --jobs N", "parallel encodes: folder default 2; queue default 1"},
 		{"-f, --fast", "prefer hardware video encoders where available"},
 		{"-n, --dry-run", "show what would happen without encoding anything"},
 		{"-o, --overwrite", "redo outputs that already exist"},
@@ -299,29 +303,6 @@ func (a *application) speedTargetError(arg string) {
 	a.exitError("bad speed factor: %s - use x<number> greater than 0, e.g. x5 (faster) or x0.1 (slower)", arg)
 }
 
-// setFormat stores one format target per kind, so folder mode can take
-// e.g. "jpeg mp4 mp3" (each applies to its own kind). A second format of
-// the same kind is rejected instead of silently overwriting.
-func (a *application) setFormat(o *options, name string) {
-	switch {
-	case isTargetVideo(name):
-		if o.videoFmt != "" && o.videoFmt != name {
-			a.exitError("two video formats given: %s and %s - pick one", o.videoFmt, name)
-		}
-		o.videoFmt = name
-	case isTargetImage(name):
-		if o.imageFmt != "" && o.imageFmt != name {
-			a.exitError("two image formats given: %s and %s - pick one", o.imageFmt, name)
-		}
-		o.imageFmt = name
-	case isTargetAudio(name):
-		if o.audioFmt != "" && o.audioFmt != name {
-			a.exitError("two audio formats given: %s and %s - pick one", o.audioFmt, name)
-		}
-		o.audioFmt = name
-	}
-}
-
 // options are the parsed targets shared by single-file and batch runs.
 type options struct {
 	resolution         string
@@ -376,31 +357,16 @@ func (a *application) runMedia(positional []string, recursive bool, jobs int, fo
 		a.exitError("input file not found: %s", input)
 	}
 
-	// Remaining args are targets; keep it flexible (resolution, format, speed, compression in any order)
-	var o options
-	for _, target := range positional[1:] {
-		switch {
-		case isTargetResolution(target):
-			o.resolution = target
-		case isTargetVideo(target), isTargetImage(target), isTargetAudio(target):
-			a.setFormat(&o, target)
-		case isTargetCompression(target):
-			o.compress = target
-		case isSpeedFactor(target):
-			if o.speed != "" {
-				a.exitError("two speed factors given: %s and %s - pick one", o.speed, strings.ToLower(target))
+	o, err := parseMediaTargets(positional[1:])
+	if err != nil {
+		var target targetParseError
+		if errors.As(err, &target) {
+			if target.speed {
+				a.speedTargetError(target.target)
 			}
-			o.speed = strings.ToLower(target)
-		default:
-			// anything shaped like x<number> (x0, x-2) reads as target speed
-			// mistake: explain the right shape instead of "unknown target"
-			if t := strings.ToLower(target); strings.HasPrefix(t, "x") && len(t) > 1 {
-				if _, perr := strconv.ParseFloat(t[1:], 64); perr == nil {
-					a.speedTargetError(target)
-				}
-			}
-			a.unknownTargetError(target)
+			a.unknownTargetError(target.target)
 		}
+		a.exitError("%v", err)
 	}
 
 	// every remaining path probes or encodes, so the tools must exist
@@ -576,4 +542,61 @@ func (a *application) exitError(f string, values ...interface{}) {
 	}
 	fmt.Fprintf(a.stderr, "%s %s\n", a.errMark(), a.ui.red(msg))
 	exitCLI(1)
+}
+
+// parseMediaTargets is shared by foreground commands and durable queue jobs.
+func parseMediaTargets(args []string) (options, error) {
+	var o options
+	for _, target := range args {
+		switch {
+		case isTargetResolution(target):
+			if o.resolution != "" && o.resolution != target {
+				return o, fmt.Errorf("two resolutions given")
+			}
+			o.resolution = target
+		case isTargetCompression(target):
+			if o.compress != "" && o.compress != target {
+				return o, fmt.Errorf("two compression levels given")
+			}
+			o.compress = target
+		case isTargetVideo(target):
+			if o.videoFmt != "" && o.videoFmt != target {
+				return o, fmt.Errorf("two video formats given")
+			}
+			o.videoFmt = target
+		case isTargetImage(target):
+			if o.imageFmt != "" && o.imageFmt != target {
+				return o, fmt.Errorf("two image formats given")
+			}
+			o.imageFmt = target
+		case isTargetAudio(target):
+			if o.audioFmt != "" && o.audioFmt != target {
+				return o, fmt.Errorf("two audio formats given")
+			}
+			o.audioFmt = target
+		case isSpeedFactor(target):
+			if o.speed != "" {
+				return o, fmt.Errorf("two speed factors given")
+			}
+			o.speed = strings.ToLower(target)
+		default:
+			if strings.HasPrefix(strings.ToLower(target), "x") {
+				return o, targetParseError{target: target, speed: true}
+			}
+			return o, targetParseError{target: target}
+		}
+	}
+	return o, nil
+}
+
+type targetParseError struct {
+	target string
+	speed  bool
+}
+
+func (e targetParseError) Error() string {
+	if e.speed {
+		return "bad speed factor: " + e.target
+	}
+	return "unknown target: " + e.target
 }

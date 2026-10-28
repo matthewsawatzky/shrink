@@ -44,7 +44,13 @@ func (a *application) encodeJob(input, output, label string, total float64, args
 		return 0, errCancelled
 	}
 	start := time.Now()
-	tmp, err := os.CreateTemp(filepath.Dir(output), ".shrink-*"+filepath.Ext(output))
+	var tmp *os.File
+	var err error
+	if a.outputTemp != "" {
+		tmp, err = os.OpenFile(a.outputTemp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	} else {
+		tmp, err = os.CreateTemp(filepath.Dir(output), ".shrink-*"+filepath.Ext(output))
+	}
 	if err != nil {
 		return 0, fmt.Errorf("create temporary output: %w", err)
 	}
@@ -54,6 +60,7 @@ func (a *application) encodeJob(input, output, label string, total float64, args
 		return 0, err
 	}
 	defer os.Remove(tempPath)
+	args = queueThreadArgs(args, a.cpuThreads)
 	argv := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"}, args...)
 	argv = append(argv, tempPath)
 	var sink progressSink
@@ -78,7 +85,11 @@ func (a *application) encodeJob(input, output, label string, total float64, args
 		fmt.Fprintln(a.stderr, a.ui.cyan(name+"..."))
 	}
 	defer stopDisplay()
-	cmd := a.command("ffmpeg", argv...)
+	cmd, closeLifeline, err := a.encodingCommand(argv)
+	if err != nil {
+		return 0, err
+	}
+	defer closeLifeline()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	var stdout io.ReadCloser

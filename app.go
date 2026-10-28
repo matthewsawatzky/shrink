@@ -16,30 +16,37 @@ import (
 // application owns mutable state for one invocation. Independent invocations
 // have independent flags, output claims, encoder caches, timings and reporters.
 type application struct {
-	ctx                context.Context
-	stdout, stderr     io.Writer
-	ui                 styler
-	fast               bool
-	dryRun             bool
-	overwrite          bool
-	deleteAfter        bool
-	verbose            bool
-	machine            bool
-	parallel           bool
-	parallelTTY        bool
-	batchMode          bool
-	progStart          time.Time
-	reservedMu         sync.Mutex
-	reservedOut        map[string]bool
-	stepsMu            sync.Mutex
-	stepsByFile        map[string][]step
-	machineFiles       []machineFile
-	machineSkipped     map[string]int
-	machineDryRun      bool
-	machineNote        string
-	machineAlreadyDone int
-	liveBatch          *batchBar
-	ffmpegEncoders     func() map[string]bool
+	dataDir             string
+	workerExecutable    string
+	cpuThreads          int
+	outputTemp          string
+	queued, lowPriority bool
+	cpuFactory          func() cpuController
+	queueExecutor       func(context.Context, queueJob, int, bool) (*fileReport, error)
+	ctx                 context.Context
+	stdout, stderr      io.Writer
+	ui                  styler
+	fast                bool
+	dryRun              bool
+	overwrite           bool
+	deleteAfter         bool
+	verbose             bool
+	machine             bool
+	parallel            bool
+	parallelTTY         bool
+	batchMode           bool
+	progStart           time.Time
+	reservedMu          sync.Mutex
+	reservedOut         map[string]bool
+	stepsMu             sync.Mutex
+	stepsByFile         map[string][]step
+	machineFiles        []machineFile
+	machineSkipped      map[string]int
+	machineDryRun       bool
+	machineNote         string
+	machineAlreadyDone  int
+	liveBatch           *batchBar
+	ffmpegEncoders      func() map[string]bool
 }
 
 func newApplication(ctx context.Context, stdout, stderr io.Writer) *application {
@@ -92,7 +99,12 @@ func (a *application) run(args []string) (code int) {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	code := newApplication(ctx, os.Stdout, os.Stderr).run(os.Args[1:])
+	code := 0
+	if len(os.Args) > 1 && os.Args[1] == "_queue-ffmpeg" {
+		code = queueFFmpegHelper(ctx, os.Args[2:])
+	} else {
+		code = newApplication(ctx, os.Stdout, os.Stderr).run(os.Args[1:])
+	}
 	stop()
 	os.Exit(code)
 }

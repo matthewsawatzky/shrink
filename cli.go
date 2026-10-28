@@ -8,6 +8,8 @@ import (
 )
 
 type cliRequest struct {
+	cpu           int
+	next, boost   bool
 	args          []string
 	flags         map[string]bool
 	recursive     bool
@@ -24,11 +26,14 @@ type commandSpec struct {
 // One registration supplies dispatch, command help and completion vocabulary.
 func (a *application) commands() []commandSpec {
 	return []commandSpec{
-		{"folder", "folder <folder> [target...]", "vmfnodrj", func(c cliRequest) { a.runMedia(c.args, c.recursive, c.jobs, true) }},
-		{"info", "info <file>...", "vm", func(c cliRequest) { a.runInfo(c.args) }},
+		{"que", "que <file> [targets] | start | stop | status | retry <id> | cancel <id> | clear", "m,f,d,o,next,boost,cpu,j", a.runQueue},
+		{"setting", "setting [--cpu 20%] [--jobs 1]", "m,cpu,j", a.runSettings},
+		{"stats", "stats", "m", a.runStats},
+		{"folder", "folder <folder> [target...]", "v,m,f,n,o,d,r,j", func(c cliRequest) { a.runMedia(c.args, c.recursive, c.jobs, true) }},
+		{"info", "info <file>...", "v,m", func(c cliRequest) { a.runInfo(c.args) }},
 		{"doctor", "doctor", "m", func(c cliRequest) { a.noArguments("doctor", c.args); a.runDoctor() }},
-		{"make", "make [target...]", "vmno", func(c cliRequest) { a.runMake(c.args) }},
-		{"update", "update", "mno", func(c cliRequest) { a.noArguments("update", c.args); a.runUpdate() }},
+		{"make", "make [target...]", "v,m,n,o", func(c cliRequest) { a.runMake(c.args) }},
+		{"update", "update", "m,n,o", func(c cliRequest) { a.noArguments("update", c.args); a.runUpdate() }},
 	}
 }
 
@@ -82,6 +87,23 @@ func (a *application) parseCLI(args []string) (cliRequest, error) {
 		case "-d", "--delete":
 			a.deleteAfter = true
 			flag = "d"
+		case "--next":
+			c.next = true
+			flag = "next"
+		case "--boost":
+			c.boost = true
+			flag = "boost"
+		case "--cpu":
+			i++
+			if i >= len(args) {
+				return c, fmt.Errorf("--cpu needs a percentage")
+			}
+			n, err := parseCPU(args[i])
+			if err != nil {
+				return c, err
+			}
+			c.cpu = n
+			flag = "cpu"
 		case "-j", "--jobs", "-c", "--completions":
 			i++
 			if i >= len(args) {
@@ -111,9 +133,17 @@ func (a *application) parseCLI(args []string) (cliRequest, error) {
 }
 
 func (a *application) validateFlags(c cliRequest, name, allowed string) {
+	permitted := map[string]bool{}
+	for _, flag := range strings.Split(allowed, ",") {
+		permitted[flag] = true
+	}
 	for _, flag := range sortedKeys(c.flags) {
-		if !strings.Contains(allowed, flag) {
-			a.exitError("-%s does not apply to %s", flag, name)
+		if !permitted[flag] {
+			prefix := "-"
+			if len(flag) > 1 {
+				prefix = "--"
+			}
+			a.exitError("%s%s does not apply to %s", prefix, flag, name)
 		}
 	}
 }
@@ -139,6 +169,12 @@ func (a *application) runArgs(args []string) {
 		a.usage()
 		exitCLI(1)
 	}
+	if c.args[0] == "queue" {
+		c.args[0] = "que"
+	}
+	if c.args[0] == "settings" {
+		c.args[0] = "setting"
+	}
 	for _, spec := range a.commands() {
 		if c.args[0] == spec.name {
 			a.validateFlags(c, spec.name, spec.flags)
@@ -147,9 +183,9 @@ func (a *application) runArgs(args []string) {
 			return
 		}
 	}
-	allowed := "vmfnod"
+	allowed := "v,m,f,n,o,d"
 	if stat, err := os.Stat(c.args[0]); err == nil && stat.IsDir() {
-		allowed += "rj"
+		allowed += ",r,j"
 	}
 	a.validateFlags(c, "file conversion", allowed)
 	a.runMedia(c.args, c.recursive, c.jobs, false)

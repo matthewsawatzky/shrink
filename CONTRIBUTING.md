@@ -37,6 +37,8 @@ go build ./...
 | `cli.go` | flag parsing and command registry used by dispatch, usage and completion |
 | `main.go` | target parsing/validation, resolutions, levels, media command coordination |
 | `formats.go` | output encoders, probe codecs, containers, aliases and audio dependencies |
+| `queue_store.go`, `queue_worker.go`, `queue_cli.go` | durable queue data, scheduling, controls and aggregate stats |
+| `queue_cpu*.go`, `queue_platform*.go`, `queue_helper.go` | CPU budgets, OS locks, detached workers and encoder lifetime protection |
 | `plan.go` | shared media job planning, request matching and execution |
 | `media.go` | ffprobe metadata, codec helpers, output naming and result/deletion policy |
 | `batch.go` | folder mode: scanning, worklist, parallel workers, summaries |
@@ -51,6 +53,8 @@ go build ./...
 | `install.sh`, `install.ps1`, `uninstall.sh`, `uninstall.ps1` | installer/uninstaller scripts shipped with releases |
 
 The format metadata in `formats.go` drives parsing, completion, doctor checks, and request matching. Add commands in the `commands` registry in `cli.go`. See [architecture.md](docs/architecture.md) for the job lifecycle and extension guide.
+
+Queue behaviour and isolated integration tests are described in [docs/queue.md](docs/queue.md). Tests use `SHRINK_DATA_DIR` overrides and do not touch the user's queue.
 
 ## Version policy
 

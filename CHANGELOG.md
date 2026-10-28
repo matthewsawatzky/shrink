@@ -6,10 +6,28 @@ Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-28
+
+### Added
+
+- A persistent background queue (`que`/`queue`) with manual restart, parallel jobs, stop/retry/cancel controls, and no boot-time service.
+- Saved queue CPU/concurrency settings, per-job CPU overrides, and `--next`/exclusive `--boost` scheduling.
+- Local queue compression stats that discard completed filenames and retain only aggregate counts, bytes, timing and file types.
+
 ### Changed
 
 - Releases now verify, build and publish locally using the existing Go cache. GitHub Actions remains available for pull-request checks and manual release recovery.
 - Interrupted releases can be resumed; all archives upload into a draft before a complete release is published.
+
+### Fixed
+
+- Late queue cancellation discarding completion records and statistics for an already published output.
+- Queue cancellation killing the encoder helper before it can stop ffmpeg on Windows.
+
+### Compatibility notes
+
+- Queue processing defaults to a 20% CPU allowance and one active job. Native CPU caps depend on platform support; the thread-based fallback, including on macOS, is approximate.
+- Queued jobs do not restart automatically after reboot. Run `shrink que start`; interrupted jobs encode again from the beginning.
 
 ## [1.0.0] - 2026-10-27
 

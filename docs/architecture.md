@@ -46,3 +46,10 @@ Local release tooling checks formatting, runs vet and race-enabled unit/integrat
 CI retains full verification for pull requests and manual runs. Tag pushes do not automatically rebuild releases. A manual Release fallback verifies an explicitly selected tag and uses the same build, changelog and publish helpers when local publishing is unavailable. Both installers require a valid matching SHA-256 checksum before extraction/install.
 
 CPU-thread budgets and streaming discovery remain workload-dependent tuning opportunities. The worker count is bounded by `-j`; encoder thread defaults remain unchanged because no representative performance benchmark justifies a different default.
+
+
+## Durable background work
+
+The queue wraps the existing planner and transactional runner; it does not introduce a second encoder implementation. State/settings/anonymous aggregate statistics share one atomic snapshot protected by an OS file lock. A separate worker lock guarantees single ownership and automatically releases on process death. Inputs and output names are reserved before workers are dispatched; the same input never runs concurrently.
+
+Each running job owns an application/context and a known temporary path. A pipe-watching helper cancels the encoder when its worker disappears. Unfinished jobs restart from scratch. Completion and statistics commit together, then optional original deletion runs; it can leave an original after a crash, but cannot leave a pending job whose original has already been deleted. Completed/cancelled records have their paths and options removed. See [queue.md](queue.md) for semantics and platform limits.

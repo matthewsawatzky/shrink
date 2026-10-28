@@ -168,6 +168,22 @@ Outputs are written next to the input, and existing files are never overwritten 
 - `-n` shows exactly what a run would do, without writing anything.
 - `-d` deletes each original once a smaller, verified replacement exists (compressed or rescaled same-kind outputs only). If auxiliary streams would be lost, the original is kept.
 
+### Background queue
+
+```bash
+shrink que clip.mov 720p spacesaver    # queue and start background work
+shrink que important.mov --next --boost
+shrink que status
+shrink que stop
+shrink que start --cpu 40% --jobs 2
+shrink setting --cpu 20% --jobs 1      # saved queue defaults
+shrink stats
+```
+
+The worker exits when the queue is empty and does not start at boot. `que start` restarts unfinished jobs from the beginning; partial ffmpeg streams are never resumed. `--next` promotes waiting work, while `--boost` waits for active jobs to finish and then runs one job alone at a 100% CPU allowance. Defaults are 20% CPU and one job; thread-based fallback limits are approximate.
+
+Queue data uses the OS application-data directory. Completed jobs discard filenames and paths, while local aggregate stats retain counts, byte reduction, timing and file types. See [the queue guide](docs/queue.md) for CPU limits, recovery, privacy and all commands.
+
 ### Doctor
 
 `shrink doctor` prints a checklist of everything shrink depends on — the core tools, every encoder behind each target, and hardware encoding (`-f`) support. A stripped-down ffmpeg build shows exactly which targets are unavailable, e.g. `webp` needs `libwebp`. Exits `0` when the core tools are present (missing optional encoders are reported, not fatal), `1` when they are not; `-m` emits the same report as JSON.

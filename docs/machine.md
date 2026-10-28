@@ -137,3 +137,10 @@ Folder-mode failures keep the normal document shape: the run completes, failures
 ```
 
 `updated` is always present: it stays `false` when already current or Homebrew-managed (a `note` then explains why), and a dry run sets `updated_to` while `updated` stays `false`.
+
+
+## Queue commands
+
+`que status -m` returns `running`, the queue schema `version` (currently 1), `paused`, saved `settings`, `worker` resource information, `jobs`, and anonymous `stats`. Unfinished jobs include their paths and targets; completed/cancelled records omit those fields. `setting -m` returns `cpu_percent` and `jobs`. `stats -m` returns queue-only aggregate counters and a `file_types` map keyed by input extension. See [queue.md](queue.md) for CPU precedence, restart behaviour and privacy.
+
+Enqueue responses include `id` and `queued`; if the job was saved but worker startup failed, `worker_error` explains it. `que start`, `stop`, `retry`, `cancel`, and `clear` return a JSON acknowledgement. Failed jobs remain in the queue with a generic note; raw ffmpeg messages are not stored.

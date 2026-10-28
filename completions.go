@@ -20,6 +20,7 @@ func (a *application) completionWords() []string {
 	}
 	words = append(words, makeTargetWords()...)
 	words = append(words,
+		"--cpu", "--next", "--boost", "start", "stop", "status", "list", "retry", "cancel", "clear", "queue", "settings",
 		"-h", "--help", "--",
 		"-v", "--verbose",
 		"-r", "--recursive",
