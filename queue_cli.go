@@ -328,7 +328,7 @@ func (a *application) runStats(c cliRequest) {
 		a.printJSON(q.Stats)
 		return
 	}
-	fmt.Fprintf(a.stdout, "compression stats (foreground + queue): %d files, %s -> %s, net same-kind reduction %s; processing time %s\n", q.Stats.Files, a.humanSize(q.Stats.InputBytes), a.humanSize(q.Stats.OutputBytes), a.humanSize(q.Stats.SavedBytes), time.Duration(q.Stats.ProcessingMS)*time.Millisecond)
+	fmt.Fprintf(a.stdout, "compression stats (all-time): %d files, %s -> %s, net same-kind reduction %s; processing time %s\n", q.Stats.Files, a.humanSize(q.Stats.InputBytes), a.humanSize(q.Stats.OutputBytes), a.humanSize(q.Stats.SavedBytes), time.Duration(q.Stats.ProcessingMS)*time.Millisecond)
 	for _, kind := range sortedKeys(q.Stats.Types) {
 		v := q.Stats.Types[kind]
 		fmt.Fprintf(a.stdout, "  %s: %d files\n", strings.TrimPrefix(kind, "."), v.Files)

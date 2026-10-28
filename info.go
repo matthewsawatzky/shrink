@@ -274,7 +274,7 @@ func (a *application) runOverview() {
 	}
 	fmt.Fprintf(a.stderr, "%s\n", a.ui.bold("shrink "+info.Version))
 	fmt.Fprintf(a.stderr, "  Binary          %s\n  Platform        %s\n", a.humanSize(info.BinarySizeBytes), info.Platform)
-	fmt.Fprintf(a.stderr, "\n%s\n", a.ui.bold("Compression stats (foreground + queue)"))
+	fmt.Fprintf(a.stderr, "\n%s\n", a.ui.bold("Compression stats (all-time)"))
 	stats := info.Stats
 	if stats.Files == 0 {
 		fmt.Fprintln(a.stderr, "  No completed encodes recorded yet.")
@@ -292,7 +292,6 @@ func (a *application) runOverview() {
 			fmt.Fprintf(a.stderr, "    %-8s %d files\n", strings.TrimPrefix(kind, "."), stats.Types[kind].Files)
 		}
 	}
-	fmt.Fprintf(a.stderr, "\n  %s\n", a.ui.dim("Reduction excludes derived outputs; originals may still be retained."))
 }
 
 // printFileInfo renders one fileInfo in the tool's compact style.

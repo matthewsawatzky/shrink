@@ -6,6 +6,12 @@ Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-10-28
+
+### Fixed
+
+- Simplified stats headings to "all-time" and removed the original-retention footer from `shrink info`.
+
 ## [2.3.0] - 2026-10-28
 
 ### Added

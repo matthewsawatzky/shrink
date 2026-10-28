@@ -65,7 +65,7 @@ func TestInfoWithoutFilesShowsInstallationAndQueueStats(t *testing.T) {
 				return
 			}
 			text := stderr.String()
-			for _, want := range []string{"shrink " + version, "Binary", "Platform", "3 files (2 same-kind, 1 derived)", "50KB", "- 50%", "mp4", "wav", "foreground + queue"} {
+			for _, want := range []string{"shrink " + version, "Binary", "Platform", "3 files (2 same-kind, 1 derived)", "50KB", "- 50%", "mp4", "wav", "Compression stats (all-time)"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %q in overview:\n%s", want, text)
 				}
