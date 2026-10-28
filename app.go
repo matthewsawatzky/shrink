@@ -25,6 +25,7 @@ type application struct {
 	cpuFactory          func() cpuController
 	queueExecutor       func(context.Context, queueJob, int, bool) (*fileReport, error)
 	updateHTTPClient    *http.Client
+	statsWarning        sync.Once
 	ctx                 context.Context
 	stdout, stderr      io.Writer
 	ui                  styler

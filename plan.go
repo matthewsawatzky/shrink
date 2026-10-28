@@ -180,7 +180,8 @@ func (p *jobPlan) reserve() {
 	p.output = p.app.claimOutput(filepath.Dir(p.output), stem, strings.TrimPrefix(filepath.Ext(p.output), "."))
 }
 
-func (p jobPlan) execute() (*fileReport, error) {
+func (p jobPlan) execute() (report *fileReport, err error) {
+	defer func() { p.app.recordForegroundOutcome(p.input, report, err) }()
 	if p.noop {
 		return p.app.noopReport(p.input), nil
 	}

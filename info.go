@@ -267,17 +267,17 @@ func (a *application) runOverview() {
 	if err != nil {
 		a.exitError("could not load compression stats: %v", err)
 	}
-	info := installationInfo{Version: version, Platform: runtime.GOOS + "/" + runtime.GOARCH, BinarySizeBytes: binary.Size(), StatsScope: "queue", Stats: state.Stats}
+	info := installationInfo{Version: version, Platform: runtime.GOOS + "/" + runtime.GOARCH, BinarySizeBytes: binary.Size(), StatsScope: "foreground_and_queue", Stats: state.Stats}
 	if a.machine {
 		a.printJSON(info)
 		return
 	}
 	fmt.Fprintf(a.stderr, "%s\n", a.ui.bold("shrink "+info.Version))
 	fmt.Fprintf(a.stderr, "  Binary          %s\n  Platform        %s\n", a.humanSize(info.BinarySizeBytes), info.Platform)
-	fmt.Fprintf(a.stderr, "\n%s\n", a.ui.bold("Compression stats (queue)"))
+	fmt.Fprintf(a.stderr, "\n%s\n", a.ui.bold("Compression stats (foreground + queue)"))
 	stats := info.Stats
 	if stats.Files == 0 {
-		fmt.Fprintln(a.stderr, "  No completed queue encodes yet.")
+		fmt.Fprintln(a.stderr, "  No completed encodes recorded yet.")
 	}
 	fmt.Fprintf(a.stderr, "  Completed       %d files (%d same-kind, %d derived)\n", stats.Files, stats.CompressedFiles, stats.DerivedFiles)
 	fmt.Fprintf(a.stderr, "  Total size      %s -> %s\n", a.humanSize(stats.InputBytes), a.humanSize(stats.OutputBytes))
@@ -292,7 +292,7 @@ func (a *application) runOverview() {
 			fmt.Fprintf(a.stderr, "    %-8s %d files\n", strings.TrimPrefix(kind, "."), stats.Types[kind].Files)
 		}
 	}
-	fmt.Fprintf(a.stderr, "\n  %s\n  %s\n", a.ui.dim("Queue history only; foreground runs are not tracked."), a.ui.dim("Reduction excludes derived outputs; originals may still be retained."))
+	fmt.Fprintf(a.stderr, "\n  %s\n", a.ui.dim("Reduction excludes derived outputs; originals may still be retained."))
 }
 
 // printFileInfo renders one fileInfo in the tool's compact style.

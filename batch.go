@@ -215,6 +215,9 @@ func (a *application) batchProcess(dir string, o options, recursive bool, jobs i
 		a.reportDryRun(dir, recursive, work, skipped, alreadyDone)
 		return
 	}
+	if alreadyDone > 0 {
+		a.updateForegroundStats(func(stats *queueStats) { stats.Skipped += int64(alreadyDone) })
+	}
 
 	workers := jobs
 	if workers > len(work) {
@@ -430,6 +433,7 @@ func filesWord(n int) string {
 
 func executeWork(w batchWork) (*fileReport, error) {
 	if w.err != nil {
+		w.plan.app.recordForegroundOutcome(w.path, nil, w.err)
 		return nil, w.err
 	}
 	return w.plan.execute()

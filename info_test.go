@@ -59,13 +59,13 @@ func TestInfoWithoutFilesShowsInstallationAndQueueStats(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if info.Version != version || info.Platform != runtime.GOOS+"/"+runtime.GOARCH || info.BinarySizeBytes != binary.Size() || info.StatsScope != "queue" || info.Stats.Files != 3 || info.Stats.SavedBytes != 50*1024 || stderr.Len() != 0 {
+				if info.Version != version || info.Platform != runtime.GOOS+"/"+runtime.GOARCH || info.BinarySizeBytes != binary.Size() || info.StatsScope != "foreground_and_queue" || info.Stats.Files != 3 || info.Stats.SavedBytes != 50*1024 || stderr.Len() != 0 {
 					t.Fatalf("incorrect overview: %+v stderr=%q", info, stderr.String())
 				}
 				return
 			}
 			text := stderr.String()
-			for _, want := range []string{"shrink " + version, "Binary", "Platform", "3 files (2 same-kind, 1 derived)", "50KB", "- 50%", "mp4", "wav", "foreground runs are not tracked"} {
+			for _, want := range []string{"shrink " + version, "Binary", "Platform", "3 files (2 same-kind, 1 derived)", "50KB", "- 50%", "mp4", "wav", "foreground + queue"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %q in overview:\n%s", want, text)
 				}
@@ -79,7 +79,7 @@ func TestInfoOverviewWithNoHistory(t *testing.T) {
 	var out, stderr bytes.Buffer
 	a := newApplication(context.Background(), &out, &stderr)
 	a.dataDir = t.TempDir()
-	if code := a.run([]string{"info"}); code != 0 || !strings.Contains(stderr.String(), "No completed queue encodes yet.") || !strings.Contains(stderr.String(), "0 files") {
+	if code := a.run([]string{"info"}); code != 0 || !strings.Contains(stderr.String(), "No completed encodes recorded yet.") || !strings.Contains(stderr.String(), "0 files") {
 		t.Fatalf("empty history: code=%d %s %s", code, out.String(), stderr.String())
 	}
 	if fileExists(filepath.Join(a.dataDir, "queue.json")) {

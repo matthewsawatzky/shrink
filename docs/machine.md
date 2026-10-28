@@ -108,7 +108,7 @@ Folder-mode failures keep the normal document shape: the run completes, failures
 
 ## Other commands
 
-`shrink info -m` without files returns an object with `version`, `platform`, `binary_size_bytes`, `stats_scope` (currently `"queue"`), and `stats`. The stats are the same aggregate counters returned by `shrink stats -m`; foreground runs are not tracked. It does not need ffmpeg or ffprobe. With files, `shrink info <file>... -m` continues to return an array of media metadata objects.
+`shrink info -m` without files returns an object with `version`, `platform`, `binary_size_bytes`, `stats_scope` (`"foreground_and_queue"`), and `stats`. The stats are the same aggregate counters returned by `shrink stats -m`, covering foreground single-file/folder work and queue jobs. Existing queue totals are retained; earlier foreground work cannot be reconstructed. It does not need ffmpeg or ffprobe. With files, `shrink info <file>... -m` continues to return an array of media metadata objects.
 
 `shrink doctor -m` and `shrink update -m` emit their own documents instead of the run document.
 
@@ -143,6 +143,6 @@ Folder-mode failures keep the normal document shape: the run completes, failures
 
 ## Queue commands
 
-`que status -m` returns `running`, the queue schema `version` (currently 1), `paused`, saved `settings`, `worker` resource information, `jobs`, and anonymous `stats`. Unfinished jobs include their paths and targets; completed/cancelled records omit those fields. `setting -m` returns `cpu_percent` and `jobs`. `stats -m` returns queue-only aggregate counters and a `file_types` map keyed by input extension. See [queue.md](queue.md) for CPU precedence, restart behaviour and privacy.
+`que status -m` returns `running`, the queue schema `version` (currently 1), `paused`, saved `settings`, `worker` resource information, `jobs`, and anonymous `stats`. Unfinished jobs include their paths and targets; completed/cancelled records omit those fields. `setting -m` returns `cpu_percent` and `jobs`. `stats -m` returns combined foreground/queue aggregate counters and a `file_types` map keyed by input extension. See [queue.md](queue.md) for CPU precedence, restart behaviour and privacy.
 
 Enqueue responses include `id` and `queued`; if the job was saved but worker startup failed, `worker_error` explains it. `que start`, `stop`, `retry`, `cancel`, and `clear` return a JSON acknowledgement. Failed jobs remain in the queue with a generic note; raw ffmpeg messages are not stored.

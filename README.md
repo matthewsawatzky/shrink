@@ -90,7 +90,7 @@ Homebrew installs can also go with `brew uninstall shrink`. On Windows: `irm htt
 ```bash
 shrink <input> [target ...]          # compress or convert one file
 shrink folder <folder> [target ...]  # every matching file in a folder
-shrink info                          # binary size, version and queue compression stats
+shrink info                          # binary size, version and compression stats
 shrink info <file> ...               # inspect codecs, duration, fps, bitrate
 shrink doctor                        # check ffmpeg and encoder availability
 shrink make [target ...]             # generate test media
@@ -186,6 +186,8 @@ shrink stats
 The worker exits when the queue is empty and does not start at boot. `que start` restarts unfinished jobs from the beginning; partial ffmpeg streams are never resumed. `--next` promotes waiting work, while `--boost` waits for active jobs to finish and then runs one job alone at a 100% CPU allowance. Defaults are 20% CPU and one job; thread-based fallback limits are approximate.
 
 Queue data uses the OS application-data directory. Completed jobs discard filenames and paths, while local aggregate stats retain counts, byte reduction, timing and file types. See [the queue guide](docs/queue.md) for CPU limits, recovery, privacy and all commands.
+
+`shrink info` and `shrink stats` combine foreground single-file/folder work and queue jobs. Foreground history starts with this version; existing queue totals are retained. Dry runs and generated `make` fixtures do not add completed encodes. Foreground stats retain only aggregates, never filenames.
 
 ### Doctor
 

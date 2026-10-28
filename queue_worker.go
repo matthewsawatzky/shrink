@@ -412,32 +412,7 @@ func recordQueueOutcome(q *queueState, r queueOutcome) {
 			q.Stats.FailedAttempts++
 			return
 		}
-		if r.report.noop {
-			q.Stats.Skipped++
-		} else {
-			q.Stats.Files++
-			q.Stats.InputBytes += r.report.inBytes
-			q.Stats.OutputBytes += r.report.outBytes
-			derived := r.report.operation == "extract_audio" || r.report.operation == "grab_frame"
-			if derived {
-				q.Stats.DerivedFiles++
-			} else {
-				q.Stats.CompressedFiles++
-				q.Stats.CompressionInputBytes += r.report.inBytes
-				q.Stats.CompressionOutputBytes += r.report.outBytes
-				q.Stats.SavedBytes = q.Stats.CompressionInputBytes - q.Stats.CompressionOutputBytes
-			}
-			q.Stats.ProcessingMS += r.report.took.Milliseconds()
-			kind := strings.ToLower(filepath.Ext(j.Input))
-			v := q.Stats.Types[kind]
-			v.Files++
-			v.InputBytes += r.report.inBytes
-			v.OutputBytes += r.report.outBytes
-			if !derived {
-				v.SavedBytes += r.report.inBytes - r.report.outBytes
-			}
-			q.Stats.Types[kind] = v
-		}
+		accumulateStats(&q.Stats, j.Input, r.report)
 		scrubJob(j, "completed", "")
 		return
 	}

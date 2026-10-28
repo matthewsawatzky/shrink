@@ -6,6 +6,16 @@ Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-28
+
+### Added
+
+- Foreground single-file and folder runs now contribute to the same anonymous compression stats as queued jobs. Existing queue totals are preserved; dry runs and generated fixtures do not count as completed encodes.
+
+### Compatibility notes
+
+- `shrink info -m` now reports `stats_scope` as `foreground_and_queue`. Earlier foreground work cannot be reconstructed; new foreground results are included from this version onward.
+
 ## [2.2.0] - 2026-10-28
 
 ### Added

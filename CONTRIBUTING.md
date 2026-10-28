@@ -39,6 +39,7 @@ go build ./...
 | `formats.go` | output encoders, probe codecs, containers, aliases and audio dependencies |
 | `queue_store.go`, `queue_worker.go`, `queue_cli.go` | durable queue data, scheduling, controls and aggregate stats |
 | `queue_cpu*.go`, `queue_platform*.go`, `queue_helper.go` | CPU budgets, OS locks, detached workers and encoder lifetime protection |
+| `stats.go` | shared anonymous totals for foreground and queue processing |
 | `plan.go` | shared media job planning, request matching and execution |
 | `media.go` | ffprobe metadata, codec helpers, output naming and result/deletion policy |
 | `batch.go` | folder mode: scanning, worklist, parallel workers, summaries |

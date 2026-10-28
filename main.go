@@ -392,6 +392,7 @@ func (a *application) runMedia(positional []string, recursive bool, jobs int, fo
 	}
 	p, err := a.planJob(input, o)
 	if err != nil {
+		a.recordForegroundOutcome(input, nil, err)
 		a.exitError("%v", err)
 	}
 	if !p.noop {
