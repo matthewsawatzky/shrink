@@ -73,6 +73,7 @@ shrink que important.mov 1080p --next --boost
 
 ```bash
 shrink stats
+shrink info
 shrink stats -m
 shrink que status -m
 shrink setting -m

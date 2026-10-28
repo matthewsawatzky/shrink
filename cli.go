@@ -30,7 +30,7 @@ func (a *application) commands() []commandSpec {
 		{"setting", "setting [--cpu 20%] [--jobs 1]", "m,cpu,j", a.runSettings},
 		{"stats", "stats", "m", a.runStats},
 		{"folder", "folder <folder> [target...]", "v,m,f,n,o,d,r,j", func(c cliRequest) { a.runMedia(c.args, c.recursive, c.jobs, true) }},
-		{"info", "info <file>...", "v,m", func(c cliRequest) { a.runInfo(c.args) }},
+		{"info", "info [file...]", "v,m", func(c cliRequest) { a.runInfo(c.args) }},
 		{"doctor", "doctor", "m", func(c cliRequest) { a.noArguments("doctor", c.args); a.runDoctor() }},
 		{"make", "make [target...]", "v,m,n,o", func(c cliRequest) { a.runMake(c.args) }},
 		{"update", "update", "m,n,o", func(c cliRequest) { a.noArguments("update", c.args); a.runUpdate() }},

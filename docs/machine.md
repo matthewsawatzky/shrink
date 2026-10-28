@@ -108,6 +108,8 @@ Folder-mode failures keep the normal document shape: the run completes, failures
 
 ## Other commands
 
+`shrink info -m` without files returns an object with `version`, `platform`, `binary_size_bytes`, `stats_scope` (currently `"queue"`), and `stats`. The stats are the same aggregate counters returned by `shrink stats -m`; foreground runs are not tracked. It does not need ffmpeg or ffprobe. With files, `shrink info <file>... -m` continues to return an array of media metadata objects.
+
 `shrink doctor -m` and `shrink update -m` emit their own documents instead of the run document.
 
 `shrink doctor -m` exits `1` when `ok` is `false` (ffmpeg or ffprobe missing). `encoders` covers every encoder a target depends on; `missing` lists the target groups that lack one:

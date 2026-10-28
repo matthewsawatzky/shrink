@@ -6,6 +6,12 @@ Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-28
+
+### Added
+
+- `shrink info` without files shows the running binary's size, version, platform and recorded queue compression stats. Passing files still shows media metadata.
+
 ## [2.1.0] - 2026-10-28
 
 ### Changed

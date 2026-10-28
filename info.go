@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -205,10 +207,11 @@ func abs(x float64) float64 {
 	return x
 }
 
-// runInfo handles the "shrink info <file>..." subcommand.
+// runInfo reports the installation and recorded stats, or inspects media files.
 func (a *application) runInfo(paths []string) {
 	if len(paths) == 0 {
-		a.exitError("info needs a file, e.g. shrink info clip.mp4")
+		a.runOverview()
+		return
 	}
 
 	a.requireDeps()
@@ -237,6 +240,59 @@ func (a *application) runInfo(paths []string) {
 		}
 		a.printFileInfo(info)
 	}
+}
+
+type installationInfo struct {
+	Version         string     `json:"version"`
+	Platform        string     `json:"platform"`
+	BinarySizeBytes int64      `json:"binary_size_bytes"`
+	StatsScope      string     `json:"stats_scope"`
+	Stats           queueStats `json:"stats"`
+}
+
+func (a *application) runOverview() {
+	self, err := os.Executable()
+	if err != nil {
+		a.exitError("could not locate the running shrink: %v", err)
+	}
+	binary, err := os.Stat(self)
+	if err != nil {
+		a.exitError("could not read shrink binary size: %v", err)
+	}
+	store, err := a.queueStore()
+	if err != nil {
+		a.exitError("could not load compression stats: %v", err)
+	}
+	state, err := store.snapshot(a.ctx)
+	if err != nil {
+		a.exitError("could not load compression stats: %v", err)
+	}
+	info := installationInfo{Version: version, Platform: runtime.GOOS + "/" + runtime.GOARCH, BinarySizeBytes: binary.Size(), StatsScope: "queue", Stats: state.Stats}
+	if a.machine {
+		a.printJSON(info)
+		return
+	}
+	fmt.Fprintf(a.stderr, "%s\n", a.ui.bold("shrink "+info.Version))
+	fmt.Fprintf(a.stderr, "  Binary          %s\n  Platform        %s\n", a.humanSize(info.BinarySizeBytes), info.Platform)
+	fmt.Fprintf(a.stderr, "\n%s\n", a.ui.bold("Compression stats (queue)"))
+	stats := info.Stats
+	if stats.Files == 0 {
+		fmt.Fprintln(a.stderr, "  No completed queue encodes yet.")
+	}
+	fmt.Fprintf(a.stderr, "  Completed       %d files (%d same-kind, %d derived)\n", stats.Files, stats.CompressedFiles, stats.DerivedFiles)
+	fmt.Fprintf(a.stderr, "  Total size      %s -> %s\n", a.humanSize(stats.InputBytes), a.humanSize(stats.OutputBytes))
+	fmt.Fprintf(a.stderr, "  Net reduction   %s", a.humanSize(stats.SavedBytes))
+	if stats.CompressionInputBytes > 0 {
+		fmt.Fprintf(a.stderr, "  %s", a.savingsText(stats.CompressionInputBytes, stats.CompressionOutputBytes))
+	}
+	fmt.Fprintf(a.stderr, "\n  Processing      %s\n  Skipped         %d\n  Failed attempts %d\n", a.humanDuration(float64(stats.ProcessingMS)/1000), stats.Skipped, stats.FailedAttempts)
+	if len(stats.Types) > 0 {
+		fmt.Fprintf(a.stderr, "\n  %s\n", a.ui.dim("File types"))
+		for _, kind := range sortedKeys(stats.Types) {
+			fmt.Fprintf(a.stderr, "    %-8s %d files\n", strings.TrimPrefix(kind, "."), stats.Types[kind].Files)
+		}
+	}
+	fmt.Fprintf(a.stderr, "\n  %s\n  %s\n", a.ui.dim("Queue history only; foreground runs are not tracked."), a.ui.dim("Reduction excludes derived outputs; originals may still be retained."))
 }
 
 // printFileInfo renders one fileInfo in the tool's compact style.

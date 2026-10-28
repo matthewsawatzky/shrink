@@ -1,9 +1,130 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestInfoWithoutFilesShowsInstallationAndQueueStats(t *testing.T) {
+	for _, machine := range []bool{false, true} {
+		t.Run(map[bool]string{false: "human", true: "machine"}[machine], func(t *testing.T) {
+			// Installation info must work even if media dependencies are absent.
+			t.Setenv("PATH", "")
+			var out, stderr bytes.Buffer
+			a := newApplication(context.Background(), &out, &stderr)
+			a.dataDir = t.TempDir()
+			s := queueStore{dir: a.dataDir}
+			if err := s.update(a.ctx, func(q *queueState) error {
+				q.Paused = true
+				q.Jobs = []queueJob{{ID: "private", State: "queued", Input: "/private/secret-recording.wav"}}
+				q.Stats = queueStats{Files: 3, CompressedFiles: 2, DerivedFiles: 1, InputBytes: 120 * 1024, OutputBytes: 55 * 1024, CompressionInputBytes: 100 * 1024, CompressionOutputBytes: 50 * 1024, SavedBytes: 50 * 1024, ProcessingMS: 2500, Skipped: 1, FailedAttempts: 2, Types: map[string]typeStats{".wav": {Files: 2}, ".mp4": {Files: 1}}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(a.dataDir, "queue.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"info"}
+			if machine {
+				args = append(args, "-m")
+			}
+			if code := a.run(args); code != 0 {
+				t.Fatalf("info failed without ffprobe: %d %s %s", code, out.String(), stderr.String())
+			}
+			if strings.Contains(out.String()+stderr.String(), "secret-recording") {
+				t.Fatal("overview exposed a queued filename")
+			}
+			after, _ := os.ReadFile(filepath.Join(a.dataDir, "queue.json"))
+			if !bytes.Equal(before, after) {
+				t.Fatal("overview modified queue data")
+			}
+			if machine {
+				var info installationInfo
+				if err := json.Unmarshal(out.Bytes(), &info); err != nil {
+					t.Fatal(err, out.String())
+				}
+				self, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				binary, err := os.Stat(self)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info.Version != version || info.Platform != runtime.GOOS+"/"+runtime.GOARCH || info.BinarySizeBytes != binary.Size() || info.StatsScope != "queue" || info.Stats.Files != 3 || info.Stats.SavedBytes != 50*1024 || stderr.Len() != 0 {
+					t.Fatalf("incorrect overview: %+v stderr=%q", info, stderr.String())
+				}
+				return
+			}
+			text := stderr.String()
+			for _, want := range []string{"shrink " + version, "Binary", "Platform", "3 files (2 same-kind, 1 derived)", "50KB", "- 50%", "mp4", "wav", "foreground runs are not tracked"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing %q in overview:\n%s", want, text)
+				}
+			}
+		})
+	}
+}
+
+func TestInfoOverviewWithNoHistory(t *testing.T) {
+	t.Setenv("PATH", "")
+	var out, stderr bytes.Buffer
+	a := newApplication(context.Background(), &out, &stderr)
+	a.dataDir = t.TempDir()
+	if code := a.run([]string{"info"}); code != 0 || !strings.Contains(stderr.String(), "No completed queue encodes yet.") || !strings.Contains(stderr.String(), "0 files") {
+		t.Fatalf("empty history: code=%d %s %s", code, out.String(), stderr.String())
+	}
+	if fileExists(filepath.Join(a.dataDir, "queue.json")) {
+		t.Fatal("empty overview wrote queue history")
+	}
+}
+
+func TestInfoOverviewPreservesCorruptHistory(t *testing.T) {
+	var out, stderr bytes.Buffer
+	a := newApplication(context.Background(), &out, &stderr)
+	a.dataDir = t.TempDir()
+	path := filepath.Join(a.dataDir, "queue.json")
+	before := []byte("{broken")
+	if err := os.WriteFile(path, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code := a.run([]string{"info", "-m"}); code != 1 || !strings.Contains(out.String(), "could not load compression stats") {
+		t.Fatalf("corrupt history was ignored: %d %s", code, out.String())
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("overview replaced corrupt history")
+	}
+}
+
+func TestInfoWithFilesStillReturnsMediaArray(t *testing.T) {
+	first := fixture(t, "first.wav", "-f", "lavfi", "-i", "sine=duration=0.1")
+	second := fixture(t, "second.wav", "-f", "lavfi", "-i", "sine=duration=0.2")
+	var out, stderr bytes.Buffer
+	a := newApplication(context.Background(), &out, &stderr)
+	a.dataDir = t.TempDir()
+	if code := a.run([]string{"info", first, second, "-m"}); code != 0 {
+		t.Fatal(code, out.String(), stderr.String())
+	}
+	var infos []fileInfo
+	if err := json.Unmarshal(out.Bytes(), &infos); err != nil || len(infos) != 2 {
+		t.Fatal(err, out.String())
+	}
+	if infos[0].Path != first || infos[1].Path != second || infos[0].Kind != "audio" || infos[1].Format.Size <= 0 {
+		t.Fatal(infos)
+	}
+	if fileExists(filepath.Join(a.dataDir, "queue.json")) {
+		t.Fatal("media info unexpectedly wrote queue data")
+	}
+}
 
 func TestParseFrameRate(t *testing.T) {
 	cases := []struct {
