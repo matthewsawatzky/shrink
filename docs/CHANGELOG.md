@@ -1,5 +1,7 @@
 # Changelog
 
+[← Back to the README](../README.md)
+
 Each release records its user-visible changes here. GitHub release notes are
 extracted from the matching dated section by `scripts/release-notes.sh`.
 Version policy and the release checklist are in [CONTRIBUTING.md](CONTRIBUTING.md).

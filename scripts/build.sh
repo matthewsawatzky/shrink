@@ -1,10 +1,11 @@
 #!/usr/bin/env sh
 # build.sh - build shrink.
 #
-# usage: ./build.sh            -> local binary (./shrink, version "dev")
-#        ./build.sh <version>  -> cross-compiled release archives in dist/
-#                                e.g. ./build.sh v0.1.0
+# usage: ./scripts/build.sh            -> local binary (./shrink, version "dev")
+#        ./scripts/build.sh <version>  -> cross-compiled release archives in dist/
+#                                       e.g. ./scripts/build.sh v0.1.0
 set -eu
+cd "$(dirname "$0")/.."
 
 VERSION="${1:-}"
 

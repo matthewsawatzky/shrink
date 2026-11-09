@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 # Releases are checked and built locally; GitHub only stores the published assets.
-# ./release.sh --next major|minor|patch       preview a version
-# ./release.sh major|minor|patch|vX.Y.Z       check, build, tag, push and publish
-# ./release.sh --resume vX.Y.Z               retry an interrupted release
+# ./scripts/release.sh --next major|minor|patch       preview a version
+# ./scripts/release.sh major|minor|patch|vX.Y.Z       check, build, tag, push and publish
+# ./scripts/release.sh --resume vX.Y.Z               retry an interrupted release
 set -eu
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 if [ "${1:-}" = "--next" ] && [ "$#" -eq 2 ]; then
  exec ./scripts/next-version.sh "$2"
@@ -15,7 +15,7 @@ if [ "${1:-}" = "--resume" ] && [ "$#" -eq 2 ]; then
  shift
 fi
 [ "$#" -eq 1 ] || {
- echo "usage: ./release.sh [--next] major|minor|patch, ./release.sh vX.Y.Z, or ./release.sh --resume vX.Y.Z" >&2
+ echo "usage: ./scripts/release.sh [--next] major|minor|patch, ./scripts/release.sh vX.Y.Z, or ./scripts/release.sh --resume vX.Y.Z" >&2
  exit 1
 }
 for tool in go git gh tar ffmpeg ffprobe; do
@@ -25,7 +25,7 @@ if ! command -v sha256sum >/dev/null && ! command -v shasum >/dev/null; then
  echo "error: release requires sha256sum or shasum" >&2; exit 1
 fi
 gh auth status >/dev/null 2>&1 || { echo "error: run gh auth login before releasing" >&2; exit 1; }
-[ -z "$(git status --porcelain)" ] || { echo "error: commit all changes, including CHANGELOG.md, before releasing" >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "error: commit all changes, including docs/CHANGELOG.md, before releasing" >&2; exit 1; }
 [ "$(git branch --show-current)" = main ] || { echo "error: release from main" >&2; exit 1; }
 git fetch origin --tags
 
@@ -56,7 +56,7 @@ fi
 [ -z "$(gofmt -l .)" ] || { echo "error: run gofmt before releasing" >&2; exit 1; }
 go vet ./...
 go test -race ./...
-./build.sh "$VERSION"
+./scripts/build.sh "$VERSION"
 
 if [ "$resume" -eq 0 ]; then git tag -a "$VERSION" -F "$notes_dir/notes.md"; fi
 git push --atomic origin HEAD:main "refs/tags/$VERSION"

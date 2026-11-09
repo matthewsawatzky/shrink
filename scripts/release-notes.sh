@@ -7,7 +7,7 @@ version=${version#v}
 printf '%s\n' "$version" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
  echo "invalid release version: $version" >&2; exit 1;
 }
-changelog=${2:-CHANGELOG.md}
+changelog=${2:-docs/CHANGELOG.md}
 awk -v version="$version" '
  /^## / {
   active = 0

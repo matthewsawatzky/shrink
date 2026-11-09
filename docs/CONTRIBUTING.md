@@ -1,17 +1,19 @@
 # Contributing
 
+[← Back to the README](../README.md)
+
 Thanks for wanting to help. This covers building, testing, and releasing shrink.
 
 ## Prerequisites
 
-- Go (the version pinned in [go.mod](go.mod))
+- Go (the version pinned in [go.mod](../go.mod))
 - `ffmpeg` and `ffprobe` on your `PATH` for manual runs and integration tests. Integration tests skip when these binaries are unavailable. CI installs them and runs the complete suite.
 
 ## Build
 
 ```bash
-./build.sh          # local build -> ./shrink, version "dev"
-./build.sh v0.2.0   # cross-compiled release archives in dist/
+./scripts/build.sh          # local build -> ./shrink, version "dev"
+./scripts/build.sh v0.2.0   # cross-compiled release archives in dist/
 ```
 
 ## Test
@@ -20,7 +22,7 @@ Thanks for wanting to help. This covers building, testing, and releasing shrink.
 go test -race ./...
 ```
 
-CI runs the same on pull requests and manual runs ([ci.yml](.github/workflows/ci.yml)):
+CI runs the same on pull requests and manual runs ([ci.yml](../.github/workflows/ci.yml)):
 
 ```bash
 gofmt -l .       # must print nothing
@@ -52,11 +54,11 @@ go build ./...
 | `cmd/shrink/verbose.go` | `-v` step timings |
 | `cmd/shrink/completions.go` | zsh/bash completion scripts |
 | `scripts/install.sh`, `scripts/install.ps1`, `scripts/uninstall.sh`, `scripts/uninstall.ps1` | installer/uninstaller scripts referenced by the install docs |
-| `scripts/` | release helpers used by `release.sh` and CI |
+| `scripts/` | build/release entry points, release helpers and installers used by `scripts/release.sh` and CI |
 
-The format metadata in `formats.go` drives parsing, completion, doctor checks, and request matching. Add commands in the `commands` registry in `cli.go`. See [architecture.md](docs/architecture.md) for the job lifecycle and extension guide.
+The format metadata in `formats.go` drives parsing, completion, doctor checks, and request matching. Add commands in the `commands` registry in `cli.go`. See [architecture.md](architecture.md) for the job lifecycle and extension guide.
 
-Queue behaviour and isolated integration tests are described in [docs/queue.md](docs/queue.md). Tests use `SHRINK_DATA_DIR` overrides and do not touch the user's queue.
+Queue behaviour and isolated integration tests are described in [queue.md](queue.md). Tests use `SHRINK_DATA_DIR` overrides and do not touch the user's queue.
 
 ## Version policy
 
@@ -82,15 +84,15 @@ These rules apply before `1.0.0` too. A substantial addition can warrant a major
 Release from an up-to-date `main` branch. Releases run on your machine, reusing the Go build cache instead of waiting for a new GitHub runner. Install Go, ffmpeg/ffprobe, the GitHub CLI (`gh auth login`), and the usual tar/SHA-256 tools first.
 
 1. Fetch current tags: `git fetch origin --tags`. The release command also fetches them before selecting its version.
-2. Choose `major`, `minor` or `patch` using the table above. Preview the next version with `./release.sh --next major` (or `minor`/`patch`).
+2. Choose `major`, `minor` or `patch` using the table above. Preview the next version with `./scripts/release.sh --next major` (or `minor`/`patch`).
 3. Move the unreleased bullets into a dated section such as `## [1.1.0] - 2026-11-02`. Keep an empty `## [Unreleased]` section at the top. Review compatibility notes and the README.
 4. Preview the exact public release notes: `./scripts/release-notes.sh v1.1.0`.
-5. Commit the code, documentation and changelog. Then run `./release.sh minor`, or give the exact next version: `./release.sh v1.1.0`.
+5. Commit the code, documentation and changelog. Then run `./scripts/release.sh minor`, or give the exact next version: `./scripts/release.sh v1.1.0`.
 6. The command runs checks and integration tests locally, builds all six platform archives, pushes the commit/tag, and uploads a draft with the changelog and checksums. It publishes only when every upload succeeds, then prints the release URL. No Actions run is required.
 
 The script rejects skipped version numbers, malformed versions, missing/empty changelog entries, a dirty checkout, and releases outside `main`. It requires ffmpeg/ffprobe so integration tests cannot silently skip. It runs formatting, vet and race-enabled tests before building. Your Go cache is reused, so later release builds are faster. The installer scripts and `shrink update` pick up the release as soon as the command finishes.
 
-If a push or upload fails after a tag was created, retry with `./release.sh --resume v1.1.0` from that tag's commit on `main`. This rebuilds and verifies the same release, completes a draft if present, and publishes it after all assets are uploaded. Already-published releases are never overwritten.
+If a push or upload fails after a tag was created, retry with `./scripts/release.sh --resume v1.1.0` from that tag's commit on `main`. This rebuilds and verifies the same release, completes a draft if present, and publishes it after all assets are uploaded. Already-published releases are never overwritten.
 
 ## What GitHub Actions still does
 

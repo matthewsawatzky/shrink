@@ -38,7 +38,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
       - name: Build all platforms
-        run: ./build.sh "$RELEASE_TAG"
+        run: ./scripts/build.sh "$RELEASE_TAG"
         env:
           RELEASE_TAG: ${{ inputs.tag }}
       - name: Publish complete release

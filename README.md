@@ -1,12 +1,24 @@
 # shrink
 
 **Media compression and conversion with one short command.**
-A friendly wrapper around [ffmpeg](https://ffmpeg.org): sane defaults, three compression levels, modern codecs, and a folder mode for whole libraries.
+
+A friendly wrapper around [ffmpeg](https://ffmpeg.org): sane defaults, three compression levels, modern codecs, folder mode, and a background queue for long jobs.
 
 [![CI](https://github.com/matthewsawatzky/shrink/actions/workflows/ci.yml/badge.svg)](https://github.com/matthewsawatzky/shrink/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/matthewsawatzky/shrink?logo=github)](https://github.com/matthewsawatzky/shrink/releases)
 [![license](https://img.shields.io/github/license/matthewsawatzky/shrink)](LICENSE)
 [![Go](https://img.shields.io/github/go-version/go/matthewsawatzky/shrink?logo=go)](go.mod)
+
+[Quick start](#quick-start) · [Install](#install) · [Usage](#usage) · [Documentation](#documentation) · [Contributing](#contributing)
+
+## Why shrink?
+
+- **One command.** `shrink clip.mov 1080p mp4` scales, converts and names the output for you.
+- **Your originals are safe.** Outputs are written next to the input, and your originals are only removed when you ask for it with `-d`.
+- **Batch whole libraries.** Folder mode walks a tree, skips hidden files, and re-runs skip work that is already done.
+- **Long jobs run in the background.** Queue work with a CPU budget, then check on it later.
+- **Fits scripts and agents.** `-m` emits a single JSON document with stable exit codes.
+- **Uses your hardware.** `-f` prefers GPU encoders where available.
 
 ## Quick start
 
@@ -33,13 +45,15 @@ shrink checks for these up front: if ffmpeg is missing it fails immediately with
 
 ## Install
 
-**macOS / Linux** (arm64 + amd64):
+### macOS / Linux
+
+arm64 and amd64 builds:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/install.sh | sh
 ```
 
-**Homebrew:**
+### Homebrew
 
 ```bash
 brew tap matthewsawatzky/tap
@@ -47,13 +61,15 @@ brew trust matthewsawatzky/tap    # required once by modern Homebrew
 brew install shrink
 ```
 
-**Go:**
+### Go
 
 ```bash
 go install github.com/matthewsawatzky/shrink/cmd/shrink@latest
 ```
 
-**Windows 10+** (amd64/arm64) — *experimental: builds are cross-compiled and not yet tested on real hardware; please [open an issue](https://github.com/matthewsawatzky/shrink/issues) if anything breaks.*
+### Windows 10+ (experimental)
+
+amd64 and arm64 builds are cross-compiled and not yet tested on real hardware. Please [open an issue](https://github.com/matthewsawatzky/shrink/issues) if anything breaks.
 
 ```powershell
 irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/install.ps1 | iex
@@ -279,9 +295,19 @@ shrink --completions zsh  > ~/.zfunc/_shrink    # add "fpath=(~/.zfunc $fpath)" 
 shrink --completions bash > /usr/local/etc/bash_completion.d/shrink
 ```
 
+## Documentation
+
+| Guide | What it covers |
+|-------|----------------|
+| [Architecture](docs/architecture.md) | application and job lifecycle, plus how to extend shrink |
+| [Machine-readable output](docs/machine.md) | the `-m` JSON schemas for every command |
+| [Background queue](docs/queue.md) | CPU limits, recovery, privacy and all queue commands |
+| [Changelog](docs/CHANGELOG.md) | user-visible changes in each release |
+| [Contributing](docs/CONTRIBUTING.md) | building, testing, versioning and releasing |
+
 ## Contributing
 
-Building, testing, versioning, and releasing are covered in [CONTRIBUTING.md](CONTRIBUTING.md). See [CHANGELOG.md](CHANGELOG.md) for release changes.
+Building, testing, versioning, and releasing are covered in [CONTRIBUTING.md](docs/CONTRIBUTING.md). See [CHANGELOG.md](docs/CHANGELOG.md) for release changes.
 
 ## Credits
 
