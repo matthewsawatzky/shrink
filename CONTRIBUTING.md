@@ -33,25 +33,26 @@ go build ./...
 
 | File | What lives there |
 |------|------------------|
-| `app.go` | per-invocation state, injected output writers, context, exit boundary |
-| `cli.go` | flag parsing and command registry used by dispatch, usage and completion |
-| `main.go` | target parsing/validation, resolutions, levels, media command coordination |
-| `formats.go` | output encoders, probe codecs, containers, aliases and audio dependencies |
-| `queue_store.go`, `queue_worker.go`, `queue_cli.go` | durable queue data, scheduling, controls and aggregate stats |
-| `queue_cpu*.go`, `queue_platform*.go`, `queue_helper.go` | CPU budgets, OS locks, detached workers and encoder lifetime protection |
-| `stats.go` | shared anonymous totals for foreground and queue processing |
-| `plan.go` | shared media job planning, request matching and execution |
-| `media.go` | ffprobe metadata, codec helpers, output naming and result/deletion policy |
-| `batch.go` | folder mode: scanning, worklist, parallel workers, summaries |
-| `doctor.go` | `shrink doctor`, fail-fast dependency check, install hints |
-| `make.go` | `shrink make`: test-media generation and its target vocabulary |
-| `update.go` | `shrink update`: release lookup, checksum verify, binary swap |
-| `machine.go` | the `-m` JSON document |
-| `progress.go` | transactional subprocess runner, verification and progress rendering |
-| `style.go` | ANSI styling (auto-disabled for pipes, `NO_COLOR`, `TERM=dumb`) |
-| `verbose.go` | `-v` step timings |
-| `completions.go` | zsh/bash completion scripts |
-| `install.sh`, `install.ps1`, `uninstall.sh`, `uninstall.ps1` | installer/uninstaller scripts shipped with releases |
+| `cmd/shrink/app.go` | per-invocation state, injected output writers, context, exit boundary |
+| `cmd/shrink/cli.go` | flag parsing and command registry used by dispatch, usage and completion |
+| `cmd/shrink/main.go` | target parsing/validation, resolutions, levels, media command coordination |
+| `cmd/shrink/formats.go` | output encoders, probe codecs, containers, aliases and audio dependencies |
+| `cmd/shrink/queue_store.go`, `queue_worker.go`, `queue_cli.go` | durable queue data, scheduling, controls and aggregate stats |
+| `cmd/shrink/queue_cpu*.go`, `queue_platform*.go`, `queue_helper.go` | CPU budgets, OS locks, detached workers and encoder lifetime protection |
+| `cmd/shrink/stats.go` | shared anonymous totals for foreground and queue processing |
+| `cmd/shrink/plan.go` | shared media job planning, request matching and execution |
+| `cmd/shrink/media.go` | ffprobe metadata, codec helpers, output naming and result/deletion policy |
+| `cmd/shrink/batch.go` | folder mode: scanning, worklist, parallel workers, summaries |
+| `cmd/shrink/doctor.go` | `shrink doctor`, fail-fast dependency check, install hints |
+| `cmd/shrink/make.go` | `shrink make`: test-media generation and its target vocabulary |
+| `cmd/shrink/update.go` | `shrink update`: release lookup, checksum verify, binary swap |
+| `cmd/shrink/machine.go` | the `-m` JSON document |
+| `cmd/shrink/progress.go` | transactional subprocess runner, verification and progress rendering |
+| `cmd/shrink/style.go` | ANSI styling (auto-disabled for pipes, `NO_COLOR`, `TERM=dumb`) |
+| `cmd/shrink/verbose.go` | `-v` step timings |
+| `cmd/shrink/completions.go` | zsh/bash completion scripts |
+| `install.sh`, `install.ps1`, `uninstall.sh`, `uninstall.ps1` | installer/uninstaller scripts shipped with releases (kept at the repo root) |
+| `scripts/` | release helpers used by `release.sh` and CI |
 
 The format metadata in `formats.go` drives parsing, completion, doctor checks, and request matching. Add commands in the `commands` registry in `cli.go`. See [architecture.md](docs/architecture.md) for the job lifecycle and extension guide.
 

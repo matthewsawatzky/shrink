@@ -338,7 +338,7 @@ func TestInstallerFailsClosedOnMissingChecksum(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fakebin, "curl"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", "install.sh", "v-test")
+	cmd := exec.Command("sh", filepath.Join("..", "..", "install.sh"), "v-test")
 	cmd.Env = append(os.Environ(), "PATH="+fakebin+string(os.PathListSeparator)+os.Getenv("PATH"), "SHRINK_INSTALL_DIR="+bindir)
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "checksum") {

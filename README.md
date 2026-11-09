@@ -50,7 +50,7 @@ brew install shrink
 **Go:**
 
 ```bash
-go install github.com/matthewsawatzky/shrink@latest
+go install github.com/matthewsawatzky/shrink/cmd/shrink@latest
 ```
 
 **Windows 10+** (amd64/arm64) — *experimental: builds are cross-compiled and not yet tested on real hardware; please [open an issue](https://github.com/matthewsawatzky/shrink/issues) if anything breaks.*
@@ -69,7 +69,7 @@ The installers also notice when ffmpeg is missing and offer to install it for yo
 |---------------|-------------|
 | curl installer or manual binary | `shrink update` |
 | Homebrew | `brew upgrade shrink` |
-| Go | `go install github.com/matthewsawatzky/shrink@latest` |
+| Go | `go install github.com/matthewsawatzky/shrink/cmd/shrink@latest` |
 
 `shrink update` checks GitHub for the latest release, verifies its SHA-256 checksum, and swaps the binary in place — a no-op when already current. Homebrew-managed installs are detected and pointed at `brew upgrade shrink` instead, and local dev builds require `-o` to be replaced.
 

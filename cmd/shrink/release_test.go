@@ -16,7 +16,7 @@ func releaseTool(t *testing.T, tool string, args ...string) (string, error) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX release tooling")
 	}
-	out, err := exec.Command("sh", append([]string{filepath.Join("scripts", tool)}, args...)...).CombinedOutput()
+	out, err := exec.Command("sh", append([]string{filepath.Join("..", "..", "scripts", tool)}, args...)...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -83,7 +83,7 @@ func publishFixture(t *testing.T) (string, string, string) {
 			t.Fatal(err)
 		}
 	}
-	script, err := os.ReadFile("scripts/publish-release.sh")
+	script, err := os.ReadFile("../../scripts/publish-release.sh")
 	if err != nil {
 		t.Fatal(err)
 	}

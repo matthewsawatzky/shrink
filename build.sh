@@ -10,7 +10,7 @@ VERSION="${1:-}"
 
 # local build: one binary for this machine
 if [ -z "$VERSION" ]; then
-	go build -trimpath -ldflags "-s -w" -o shrink .
+	go build -trimpath -ldflags "-s -w" -o shrink ./cmd/shrink
 	echo "built ./shrink"
 	exit 0
 fi
@@ -31,7 +31,7 @@ for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 
 	echo "building shrink-$VERSION-$os-$arch"
 	CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
 		go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
-		-o "dist/shrink-$VERSION-$os-$arch/$bin" .
+		-o "dist/shrink-$VERSION-$os-$arch/$bin" ./cmd/shrink
 	tar -czf "dist/shrink-$VERSION-$os-$arch.tar.gz" \
 		-C "dist/shrink-$VERSION-$os-$arch" "$bin"
 	rm -rf "dist/shrink-$VERSION-$os-$arch"
