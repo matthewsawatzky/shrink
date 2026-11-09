@@ -1,7 +1,7 @@
 # install.ps1 - install shrink on Windows from its GitHub releases.
 #
-# usage:  irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | iex
-#    or:  ./install.ps1 [-Version v0.1.0]   (default: latest)
+# usage:  irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/install.ps1 | iex
+#    or:  ./scripts/install.ps1 [-Version v0.1.0]   (default: latest)
 param([string]$Version = "latest")
 
 $Repo = "matthewsawatzky/shrink"

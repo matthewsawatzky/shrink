@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # install.sh - install shrink from its GitHub releases.
 #
-# usage: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.sh | sh
-#    or: ./install.sh [version]     e.g. ./install.sh v0.1.0 (default: latest)
+# usage: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/install.sh | sh
+#    or: ./scripts/install.sh [version]     e.g. ./scripts/install.sh v0.1.0 (default: latest)
 #    env: SHRINK_INSTALL_DIR=/some/bin  override the install directory
 set -eu
 
@@ -162,6 +162,6 @@ ensure_ffmpeg() {
 ensure_ffmpeg
 
 say "to update later: shrink update (or re-run this command)"
-say "to uninstall: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh"
+say "to uninstall: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/uninstall.sh | sh"
 
 "$bindir/shrink" -V

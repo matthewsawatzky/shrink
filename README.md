@@ -36,7 +36,7 @@ shrink checks for these up front: if ffmpeg is missing it fails immediately with
 **macOS / Linux** (arm64 + amd64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/install.sh | sh
 ```
 
 **Homebrew:**
@@ -56,7 +56,7 @@ go install github.com/matthewsawatzky/shrink/cmd/shrink@latest
 **Windows 10+** (amd64/arm64) — *experimental: builds are cross-compiled and not yet tested on real hardware; please [open an issue](https://github.com/matthewsawatzky/shrink/issues) if anything breaks.*
 
 ```powershell
-irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/install.ps1 | iex
 ```
 
 Every release is also available as a plain binary on the [releases page](https://github.com/matthewsawatzky/shrink/releases). macOS and Linux are the tested platforms.
@@ -80,10 +80,10 @@ The updater shows your current and latest versions, the actual binary size chang
 The uninstaller removes the binary, the Homebrew package (if that's how it was installed), and the shell completions. ffmpeg is left alone, since other tools use it.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/uninstall.sh | sh
 ```
 
-Homebrew installs can also go with `brew uninstall shrink`. On Windows: `irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.ps1 | iex`.
+Homebrew installs can also go with `brew uninstall shrink`. On Windows: `irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/uninstall.ps1 | iex`.
 
 ## Usage
 

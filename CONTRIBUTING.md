@@ -51,7 +51,7 @@ go build ./...
 | `cmd/shrink/style.go` | ANSI styling (auto-disabled for pipes, `NO_COLOR`, `TERM=dumb`) |
 | `cmd/shrink/verbose.go` | `-v` step timings |
 | `cmd/shrink/completions.go` | zsh/bash completion scripts |
-| `install.sh`, `install.ps1`, `uninstall.sh`, `uninstall.ps1` | installer/uninstaller scripts shipped with releases (kept at the repo root) |
+| `scripts/install.sh`, `scripts/install.ps1`, `scripts/uninstall.sh`, `scripts/uninstall.ps1` | installer/uninstaller scripts referenced by the install docs |
 | `scripts/` | release helpers used by `release.sh` and CI |
 
 The format metadata in `formats.go` drives parsing, completion, doctor checks, and request matching. Add commands in the `commands` registry in `cli.go`. See [architecture.md](docs/architecture.md) for the job lifecycle and extension guide.
@@ -88,7 +88,7 @@ Release from an up-to-date `main` branch. Releases run on your machine, reusing 
 5. Commit the code, documentation and changelog. Then run `./release.sh minor`, or give the exact next version: `./release.sh v1.1.0`.
 6. The command runs checks and integration tests locally, builds all six platform archives, pushes the commit/tag, and uploads a draft with the changelog and checksums. It publishes only when every upload succeeds, then prints the release URL. No Actions run is required.
 
-The script rejects skipped version numbers, malformed versions, missing/empty changelog entries, a dirty checkout, and releases outside `main`. It requires ffmpeg/ffprobe so integration tests cannot silently skip. It runs formatting, vet and race-enabled tests before building. Your Go cache is reused, so later release builds are faster. `install.sh` and `shrink update` pick up the release as soon as the command finishes.
+The script rejects skipped version numbers, malformed versions, missing/empty changelog entries, a dirty checkout, and releases outside `main`. It requires ffmpeg/ffprobe so integration tests cannot silently skip. It runs formatting, vet and race-enabled tests before building. Your Go cache is reused, so later release builds are faster. The installer scripts and `shrink update` pick up the release as soon as the command finishes.
 
 If a push or upload fails after a tag was created, retry with `./release.sh --resume v1.1.0` from that tag's commit on `main`. This rebuilds and verifies the same release, completes a draft if present, and publishes it after all assets are uploaded. Already-published releases are never overwritten.
 

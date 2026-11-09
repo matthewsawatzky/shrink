@@ -1,6 +1,6 @@
 # uninstall.ps1 - remove shrink from this machine.
 #
-# usage: irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.ps1 | iex
+# usage: irm https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/uninstall.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $dir = "$env:LOCALAPPDATA\Programs\shrink"

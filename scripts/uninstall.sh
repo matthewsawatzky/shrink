@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # uninstall.sh - remove shrink from this machine.
 #
-# usage: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/uninstall.sh | sh
+# usage: curl -fsSL https://raw.githubusercontent.com/matthewsawatzky/shrink/main/scripts/uninstall.sh | sh
 #
 # Removes the standalone binary from every place install.sh puts one,
 # the Homebrew package if shrink was installed that way, and the shell
